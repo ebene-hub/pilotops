@@ -72,12 +72,16 @@ people/flights**).
 
 ## 3. Create the first admin
 
-**Option A — self-service (no CLI):** open `https://YOUR_DOMAIN/admin-signup.html`
-and create the first administrator. This page works only while *no* admin exists
-(it closes automatically afterward), and admin status is granted server-side via
-`claim_first_admin()` — client metadata can never grant admin.
+Pilot Ops is **multi-tenant** — each organization is fully isolated (its own
+admins, pilots, fleet, flights, incidents, media, stakeholders, invites, audit).
 
-**Option B — script:**
+**Option A — self-service (no CLI):** open `https://YOUR_DOMAIN/admin-signup.html`,
+enter an **organization name** + admin details. This creates a new organization
+and makes you its first admin via `create_org_and_claim()`. Admin status and the
+org assignment are granted server-side — client metadata can never grant admin.
+Members you invite from the console join *your* org automatically.
+
+**Option B — script (set `BOOTSTRAP_ORG_NAME`):**
 
 ```bash
 SUPABASE_URL="https://YOUR_DOMAIN" \

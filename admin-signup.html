@@ -401,15 +401,21 @@
 
         <!-- Sign-up: first admin only -->
         <div id="signup">
-          <div class="admin-eyebrow-form"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> First-run setup</div>
-          <h2 class="login-title">Create the first admin</h2>
-          <p class="login-desc">Set up your organization's first administrator. Available only until an admin exists.</p>
+          <div class="admin-eyebrow-form"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> New organization</div>
+          <h2 class="login-title">Create your organization</h2>
+          <p class="login-desc">Set up a new organization and its first administrator. Your org's pilots, fleet, and flights stay private to you.</p>
 
           <div id="error" class="login-error"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span id="error-msg">Something went wrong.</span></div>
 
           <form id="signup-form" class="field-stack" autocomplete="on">
             <div class="field">
-              <label class="field-label" for="fullname">Full name</label>
+              <label class="field-label" for="orgname">Organization name</label>
+              <div class="input-wrap"><span class="input-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4"/></svg></span>
+                <input id="orgname" class="input with-ic" type="text" required placeholder="e.g. Acme Drone Operations" autocomplete="organization"/>
+              </div>
+            </div>
+            <div class="field">
+              <label class="field-label" for="fullname">Your full name</label>
               <div class="input-wrap"><span class="input-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span>
                 <input id="fullname" class="input with-ic" type="text" required placeholder="e.g. Maria Santos" autocomplete="name"/>
               </div>
