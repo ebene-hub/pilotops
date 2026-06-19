@@ -38,8 +38,10 @@ if (error) {
   process.exit(1);
 }
 
-// Assign the Director role (service role bypasses RLS).
+// Grant admin status directly (the trigger no longer trusts client metadata)
+// and assign the Director role. Service role bypasses RLS.
 const userId = data.user.id;
+await admin.from("profiles").update({ is_admin: true, admin_role: "Ops Director" }).eq("id", userId);
 const { data: role } = await admin.from("roles").select("id").eq("name", "Director").single();
 if (role) {
   await admin.from("member_roles").upsert({ profile_id: userId, role_id: role.id });

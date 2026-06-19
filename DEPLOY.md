@@ -72,6 +72,13 @@ people/flights**).
 
 ## 3. Create the first admin
 
+**Option A — self-service (no CLI):** open `https://YOUR_DOMAIN/admin-signup.html`
+and create the first administrator. This page works only while *no* admin exists
+(it closes automatically afterward), and admin status is granted server-side via
+`claim_first_admin()` — client metadata can never grant admin.
+
+**Option B — script:**
+
 ```bash
 SUPABASE_URL="https://YOUR_DOMAIN" \
 SUPABASE_SERVICE_ROLE_KEY="<your service role key>" \

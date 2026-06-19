@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Sign in · Pilot Ops Admin</title>
+  <title>Set up admin · Pilot Ops</title>
   <link rel="stylesheet" href="/src/styles.css"/>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
@@ -391,97 +391,51 @@
           <div style="font-size: 15px; font-weight: 600;">Pilot Ops <span class="admin-badge">ADMIN</span></div>
         </div>
 
-        <!-- STEP 1: Credentials -->
-        <div class="step active" id="step-1">
-          <div class="admin-eyebrow-form">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-            Admin console
-          </div>
-          <h2 class="login-title">Admin sign in</h2>
-          <p class="login-desc">Restricted to dispatchers, ops directors, and safety leads.</p>
+        <!-- Closed: an admin already exists -->
+        <div id="closed" style="display:none">
+          <div class="admin-eyebrow-form"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Admin console</div>
+          <h2 class="login-title">Registration closed</h2>
+          <p class="login-desc">An admin already exists for this organization. Ask an existing admin to grant you access, then sign in.</p>
+          <a href="/admin-login.html" class="btn btn-primary login-submit" style="text-decoration:none; justify-content:center;">Go to admin sign in</a>
+        </div>
 
-          <div id="error" class="login-error">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            <span id="error-msg">Incorrect email or password.</span>
-          </div>
+        <!-- Sign-up: first admin only -->
+        <div id="signup">
+          <div class="admin-eyebrow-form"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> First-run setup</div>
+          <h2 class="login-title">Create the first admin</h2>
+          <p class="login-desc">Set up your organization's first administrator. Available only until an admin exists.</p>
 
-          <form id="login-form" class="field-stack" autocomplete="on">
+          <div id="error" class="login-error"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg><span id="error-msg">Something went wrong.</span></div>
+
+          <form id="signup-form" class="field-stack" autocomplete="on">
+            <div class="field">
+              <label class="field-label" for="fullname">Full name</label>
+              <div class="input-wrap"><span class="input-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span>
+                <input id="fullname" class="input with-ic" type="text" required placeholder="e.g. Maria Santos" autocomplete="name"/>
+              </div>
+            </div>
             <div class="field">
               <label class="field-label" for="email">Work email</label>
-              <div class="input-wrap">
-                <span class="input-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></span>
-                <input id="email" class="input with-ic" type="email" name="email" required placeholder="director@pilotops.io" autocomplete="email"/>
+              <div class="input-wrap"><span class="input-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></span>
+                <input id="email" class="input with-ic" type="email" required placeholder="director@yourorg.com" autocomplete="email"/>
               </div>
             </div>
             <div class="field">
               <label class="field-label" for="password">Password</label>
-              <div class="input-wrap">
-                <span class="input-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg></span>
-                <input id="password" class="input with-ic with-toggle" type="password" name="password" required placeholder="Enter your password" autocomplete="current-password"/>
-                <button type="button" class="pwd-toggle" id="pwd-toggle" aria-label="Show password">
-                  <svg id="pwd-eye" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                </button>
+              <div class="input-wrap"><span class="input-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg></span>
+                <input id="password" class="input with-ic with-toggle" type="password" required placeholder="At least 8 characters" autocomplete="new-password"/>
+                <button type="button" class="pwd-toggle" id="pwd-toggle" aria-label="Show password"><svg id="pwd-eye" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
               </div>
+              <div class="field-hint" style="font-size:11.5px;color:var(--text-3);margin-top:6px">At least 8 characters with one number.</div>
             </div>
-
-            <div class="remember-row">
-              <label><input type="checkbox" id="remember"/> Remember this device for 30 days</label>
-              <a href="#">Forgot password?</a>
-            </div>
-
-            <button id="submit" type="submit" class="btn btn-primary login-submit">
-              <span id="submit-label">Continue</span>
-            </button>
+            <button id="submit" type="submit" class="btn btn-primary login-submit"><span id="submit-label">Create admin account</span></button>
           </form>
-
-          <div class="login-foot">
-            Not an admin? <a href="/login.html">Sign in to Pilot Ops →</a>
-          </div>
-          <div class="login-foot" style="margin-top:10px">
-            First-time setup? <a href="/admin-signup.html">Create the first admin →</a>
-          </div>
-
-        </div>
-
-        <!-- STEP 2: 2FA -->
-        <div class="step" id="step-2">
-          <button type="button" class="step-back" id="back-btn">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-            Use a different account
-          </button>
-          <div class="admin-eyebrow-form" style="background: color-mix(in oklab, var(--success) 12%, transparent); color: var(--success);">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-            Password confirmed
-          </div>
-          <h2 class="login-title">Two-factor authentication</h2>
-          <p class="login-desc">Enter the 6-digit code from your authenticator app for <strong id="who-email">your account</strong>.</p>
-
-          <div id="error-2fa" class="login-error">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            <span>Invalid 2FA code. Try again.</span>
-          </div>
-
-          <div class="twofa-row" id="twofa-inputs" style="margin-bottom: 20px;">
-            <input class="twofa-digit" type="text" inputmode="numeric" maxlength="1" data-idx="0"/>
-            <input class="twofa-digit" type="text" inputmode="numeric" maxlength="1" data-idx="1"/>
-            <input class="twofa-digit" type="text" inputmode="numeric" maxlength="1" data-idx="2"/>
-            <input class="twofa-digit" type="text" inputmode="numeric" maxlength="1" data-idx="3"/>
-            <input class="twofa-digit" type="text" inputmode="numeric" maxlength="1" data-idx="4"/>
-            <input class="twofa-digit" type="text" inputmode="numeric" maxlength="1" data-idx="5"/>
-          </div>
-
-          <button id="submit-2fa" type="button" class="btn btn-primary login-submit">
-            <span id="submit-2fa-label">Sign in</span>
-          </button>
-
-          <div class="login-foot">
-            Lost your authenticator? <a href="#">Use a backup code</a>
-          </div>
+          <div class="login-foot">Already have an account? <a href="/admin-login.html">Admin sign in →</a></div>
         </div>
       </div>
     </main>
   </div>
 
-  <script type="module" src="/src/admin-login.js"></script>
+  <script type="module" src="/src/admin-signup.js"></script>
 </body>
 </html>
