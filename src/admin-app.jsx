@@ -1,5 +1,6 @@
 import React from "react";
 import { refresh } from "./store.jsx";
+import { visibleNotifs, unreadCount, isUnread, markAllRead, clearAllNotifs } from "./api/notif-read.js";
 // Pilot Ops Admin — App shell. Standalone admin product, separate from pilot dashboard.
 const { useState: aaAppUseState, useEffect: aaAppUseEffect } = React;
 
@@ -175,47 +176,61 @@ function AdminThemeToggle() {
   );
 }
 
+function aaNotifLabel(n) { const p = n.payload || {};
+  if (n.type === "mission_start") return `Mission started · ${p.flight || ""}`;
+  if (n.type === "emergency") return `Emergency launch · ${p.flight || ""}`;
+  if (n.type === "incident") return `Incident logged${p.severity ? " · " + p.severity : ""}`;
+  if (n.type === "summary") return `Post-flight summary sent · ${p.flight || ""}`;
+  if (n.type === "invite") return `Invite sent · ${p.email || ""}`;
+  return n.type; }
+function aaNotifRt(ts) { const d = Date.now() - new Date(ts).getTime(); if (d < 60000) return "just now"; if (d < 3600000) return Math.floor(d / 60000) + "m ago"; if (d < 86400000) return Math.floor(d / 3600000) + "h ago"; return Math.floor(d / 86400000) + "d ago"; }
+function aaNotifIcon(t) { return t === "emergency" || t === "incident" ? "warn" : t === "summary" || t === "invite" ? "mail" : "drone"; }
+
 function AdminNotificationsBell() {
   const [open, setOpen] = aaAppUseState(false);
   const [items, setItems] = aaAppUseState([]);
+  const [, bump] = aaAppUseState(0);
   const ref = aaAppUseState(() => ({ current: null }))[0];
   aaAppUseEffect(() => {
     function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
-  async function toggle() {
-    const next = !open; setOpen(next);
-    if (next && window.__supabase) {
-      const { data } = await window.__supabase.from("notifications").select("type,payload,created_at").order("created_at", { ascending: false }).limit(15);
-      setItems(data || []);
-    }
+  async function load() {
+    if (!window.__supabase) return;
+    const { data } = await window.__supabase.from("notifications").select("type,payload,created_at").order("created_at", { ascending: false }).limit(30);
+    setItems(data || []);
   }
-  const label = (n) => { const p = n.payload || {};
-    if (n.type === "mission_start") return `Mission started · ${p.flight || ""}`;
-    if (n.type === "emergency") return `Emergency launch · ${p.flight || ""}`;
-    if (n.type === "incident") return `Incident logged${p.severity ? " · " + p.severity : ""}`;
-    if (n.type === "summary") return `Post-flight summary sent · ${p.flight || ""}`;
-    if (n.type === "invite") return `Invite sent · ${p.email || ""}`;
-    return n.type; };
-  const rt = (ts) => { const d = Date.now() - new Date(ts).getTime(); if (d < 60000) return "just now"; if (d < 3600000) return Math.floor(d / 60000) + "m ago"; if (d < 86400000) return Math.floor(d / 3600000) + "h ago"; return Math.floor(d / 86400000) + "d ago"; };
+  aaAppUseEffect(() => { load(); }, []);
+  const visible = visibleNotifs(items);
+  const unread = unreadCount(items);
   return (
     <div ref={ref} style={{ position: "relative" }}>
-      <button className="iconbtn" title="Notifications" onClick={toggle}><Icon name="bell" size={16}/><span className="dot"/></button>
+      <button className="iconbtn" title="Notifications" onClick={() => { const n = !open; setOpen(n); if (n) load(); }}>
+        <Icon name="bell" size={16}/>{unread > 0 && <span className="dot"/>}
+      </button>
       {open && (
         <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 320, background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 10px 30px rgba(13,18,30,0.22)", zIndex: 1000, overflow: "hidden" }}>
-          <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", fontWeight: 600, fontSize: 13, color: "var(--text)" }}>Notifications</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
+            <span style={{ fontWeight: 600, fontSize: 13, color: "var(--text)" }}>Notifications</span>
+            {visible.length > 0 && (
+              <span style={{ display: "flex", gap: 12 }}>
+                <button onClick={() => { markAllRead(items); bump(x => x + 1); }} style={{ border: "none", background: "transparent", color: "var(--accent)", fontSize: 11.5, cursor: "pointer", padding: 0 }}>Mark all read</button>
+                <button onClick={() => { clearAllNotifs(); bump(x => x + 1); }} style={{ border: "none", background: "transparent", color: "var(--text-3)", fontSize: 11.5, cursor: "pointer", padding: 0 }}>Clear</button>
+              </span>
+            )}
+          </div>
           <div style={{ maxHeight: 360, overflowY: "auto" }}>
-            {items.length === 0 ? <div className="muted" style={{ padding: 20, textAlign: "center", fontSize: 12.5 }}>No notifications yet.</div>
-              : items.map((n, i) => (
-                <div key={i} style={{ display: "flex", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
-                  <div style={{ width: 28, height: 28, borderRadius: 7, background: n.type === "emergency" ? "color-mix(in oklab, var(--danger) 12%, transparent)" : "var(--accent-soft)", color: n.type === "emergency" ? "var(--danger)" : "var(--accent)", display: "grid", placeItems: "center", flexShrink: 0 }}><Icon name={n.type === "emergency" || n.type === "incident" ? "warn" : n.type === "summary" ? "mail" : "drone"} size={13}/></div>
+            {visible.length === 0 ? <div className="muted" style={{ padding: 20, textAlign: "center", fontSize: 12.5 }}>No notifications.</div>
+              : visible.map((n, i) => { const ur = isUnread(n); return (
+                <div key={i} style={{ display: "flex", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--border)", background: ur ? "var(--accent-soft)" : "transparent" }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 7, background: n.type === "emergency" ? "color-mix(in oklab, var(--danger) 12%, transparent)" : "var(--surface)", border: "1px solid var(--border)", color: n.type === "emergency" ? "var(--danger)" : "var(--accent)", display: "grid", placeItems: "center", flexShrink: 0 }}><Icon name={aaNotifIcon(n.type)} size={13}/></div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12.5, color: "var(--text)" }}>{label(n)}</div>
-                    <div className="muted mono" style={{ fontSize: 10.5, marginTop: 2 }}>{rt(n.created_at)}</div>
+                    <div style={{ fontSize: 12.5, color: "var(--text)", fontWeight: ur ? 600 : 400 }}>{aaNotifLabel(n)}</div>
+                    <div className="muted mono" style={{ fontSize: 10.5, marginTop: 2 }}>{aaNotifRt(n.created_at)}</div>
                   </div>
                 </div>
-              ))}
+              ); })}
           </div>
         </div>
       )}
