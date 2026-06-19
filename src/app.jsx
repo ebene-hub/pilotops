@@ -3,26 +3,37 @@ import { supabase } from "./api/supabase.js";
 // Pilot Ops — App shell: sidebar nav, topbar, tweaks, routing
 const { useState: appUseState, useEffect: appUseEffect, useMemo: appUseMemo } = React;
 
+// Static nav structure (no dummy badges). Live counts are injected at render.
 const NAV = [
   { group: "Operations", items: [
-    { id: "flight-hub", label: "Flight Hub", icon: "drone", badge: "4" },
+    { id: "flight-hub", label: "Flight Hub", icon: "drone" },
     { id: "notify", label: "Start mission", icon: "play" },
-    { id: "live", label: "Live stream", icon: "video", badge: "LIVE", live: true },
-    { id: "multi", label: "Multi-screen ops", icon: "grid", badge: "4" },
+    { id: "live", label: "Live stream", icon: "video" },
+    { id: "multi", label: "Multi-screen ops", icon: "grid" },
     { id: "summary", label: "Post-flight summary", icon: "mail" },
   ]},
   { group: "Fleet", items: [
-    { id: "fleet", label: "Aircraft and Batteries", icon: "drone", badge: "6" },
+    { id: "fleet", label: "Aircraft and Batteries", icon: "drone" },
   ]},
   { group: "Storage", items: [
-    { id: "gallery", label: "Media gallery", icon: "image", badge: "2.1k" },
+    { id: "gallery", label: "Media gallery", icon: "image" },
   ]},
   { group: "Logging", items: [
     { id: "logbook", label: "Pilot logbook", icon: "reports" },
     { id: "incidents", label: "Log incident", icon: "warn" },
-    { id: "reports", label: "Flight log archive", icon: "reports", badge: "14" },
+    { id: "reports", label: "Flight log archive", icon: "reports" },
   ]},
 ];
+
+// Inject live badges (real active-flight counts) onto the nav.
+function navWithBadges() {
+  const active = (window.ACTIVE_FLIGHTS || []).length;
+  return NAV.map(g => ({ ...g, items: g.items.map(it => {
+    if (it.id === "flight-hub" || it.id === "multi") return { ...it, badge: active ? String(active) : null };
+    if (it.id === "live") return { ...it, badge: active ? "LIVE" : null, live: active > 0 };
+    return it;
+  })}));
+}
 
 const TITLES = {
   "flight-hub": ["Operations", "Flight Hub"],
@@ -104,7 +115,7 @@ function App() {
   return (
     <div className="app-shell" data-sidebar-pos={t.sidebarPos} data-sidebar-collapsed={t.sidebarCollapsed} data-mobile-nav={mobileNavOpen ? "open" : "closed"}>
       {mobileNavOpen && <div className="mobile-nav-scrim" onClick={() => setMobileNavOpen(false)}/>}
-      <Sidebar nav={NAV} view={view} setView={setView} collapsed={t.sidebarCollapsed && !isNarrow} onToggle={() => setTweak("sidebarCollapsed", !t.sidebarCollapsed)} onMobileClose={() => setMobileNavOpen(false)}/>
+      <Sidebar nav={navWithBadges()} view={view} setView={setView} collapsed={t.sidebarCollapsed && !isNarrow} onToggle={() => setTweak("sidebarCollapsed", !t.sidebarCollapsed)} onMobileClose={() => setMobileNavOpen(false)}/>
       <div className="main-col">
         <Topbar crumbs={breadcrumbs} view={view} sector={t.sector} setSector={v => setTweak("sector", v)} onMobileMenu={() => setMobileNavOpen(true)} onOpenPalette={() => setPaletteOpen(true)}/>
         <div style={{ flex: 1, minHeight: 0, display: "flex" }}>

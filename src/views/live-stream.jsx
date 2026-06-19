@@ -1,6 +1,7 @@
 import React from "react";
 import { supabase } from "../api/supabase.js";
 import { watchPosition } from "../api/geo.js";
+import { refresh } from "../store.jsx";
 // Pilot Ops — Live Stream viewer (single pilot) — telemetry, chat, screenshot, AI annotations
 const { useState: lsUseState, useEffect: lsUseEffect, useRef: lsUseRef } = React;
 
@@ -224,7 +225,15 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
         footer={
           <>
             <button className="btn btn-ghost" onClick={() => setEndOpen(false)}>Cancel</button>
-            <button className="btn btn-primary" onClick={() => { setEndOpen(false); onEndFlight && onEndFlight(f); }}>
+            <button className="btn btn-primary" onClick={async () => {
+              setEndOpen(false);
+              // Actually end the mission in the DB so it leaves the active board.
+              if (f?.dbId) {
+                await supabase.from("flights").update({ status: "completed", ended_at: new Date().toISOString() }).eq("id", f.dbId);
+                try { await refresh(); } catch {}
+              }
+              onEndFlight && onEndFlight(f);
+            }}>
               <Icon name="check" size={13}/> End & email summary
             </button>
           </>

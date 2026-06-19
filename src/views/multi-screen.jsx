@@ -30,23 +30,36 @@ function MultiScreenView({ basemap, onFocus }) {
         </div>
       </div>
 
-      <div style={{
-        display: "grid",
-        ...gridStyle,
-        gap: 10,
-        flex: 1,
-        minHeight: 0
-      }}>
-        {ACTIVE_FLIGHTS.map((f, i) => (
-          <FeedTile key={f.id} flight={f} index={i} layout={layout} onFocus={() => onFocus(f)} onPin={() => setFocused(f.id)}/>
-        ))}
-      </div>
+      {ACTIVE_FLIGHTS.length === 0 ? (
+        <div style={{ flex: 1, display: "grid", placeItems: "center", border: "1px dashed var(--border)", borderRadius: 10 }}>
+          <div style={{ textAlign: "center", color: "var(--text-3)" }}>
+            <Icon name="grid" size={34} stroke="var(--text-4)"/>
+            <div style={{ marginTop: 12, fontSize: 15, fontWeight: 500, color: "var(--text-2)" }}>No active flights</div>
+            <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>Live feeds appear here as pilots start missions.</div>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "grid", ...gridStyle, gap: 10, flex: 1, minHeight: 0 }}>
+          {ACTIVE_FLIGHTS.map((f, i) => (
+            <FeedTile key={f.id} flight={f} index={i} layout={layout} onFocus={() => onFocus(f)} onPin={() => setFocused(f.id)}/>
+          ))}
+          {/* Fill the rest of the grid with placeholders so the layout reads as multi-screen */}
+          {Array.from({ length: Math.max(0, 4 - ACTIVE_FLIGHTS.length) }).map((_, i) => (
+            <div key={"ph" + i} style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 10, display: "grid", placeItems: "center", color: "var(--text-4)" }}>
+              <div style={{ textAlign: "center" }}>
+                <Icon name="video" size={22} stroke="var(--text-4)"/>
+                <div style={{ marginTop: 6, fontSize: 11.5 }}>Awaiting feed</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Footer strip — ops chat / quick command */}
       <div style={{ marginTop: 10, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: 8, display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ display: "flex", gap: 6 }}>
           {ACTIVE_FLIGHTS.map(f => (
-            <div key={f.id} title={f.pilot.name} className="user-avatar" style={{ width: 28, height: 28, fontSize: 11, background: `linear-gradient(135deg, ${f.pilot.color}, color-mix(in oklab, ${f.pilot.color} 70%, #000))` }}>{f.pilot.initials}</div>
+            <div key={f.id} title={f.pilot?.name || f.id} className="user-avatar" style={{ width: 28, height: 28, fontSize: 11, background: `linear-gradient(135deg, ${f.pilot?.color || "#2563eb"}, color-mix(in oklab, ${f.pilot?.color || "#2563eb"} 70%, #000))` }}>{f.pilot?.initials || "—"}</div>
           ))}
         </div>
         <div className="vdivider" style={{ height: 24 }}/>
@@ -62,10 +75,10 @@ function FeedTile({ flight, index, onFocus, onPin }) {
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", position: "relative", display: "flex", flexDirection: "column" }}>
       {/* tile head */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: "1px solid var(--border)", background: "var(--surface-2)" }}>
-        <div className="user-avatar" style={{ width: 22, height: 22, fontSize: 9, background: `linear-gradient(135deg, ${flight.pilot.color}, color-mix(in oklab, ${flight.pilot.color} 70%, #000))` }}>{flight.pilot.initials}</div>
+        <div className="user-avatar" style={{ width: 22, height: 22, fontSize: 9, background: `linear-gradient(135deg, ${flight.pilot?.color || "#2563eb"}, color-mix(in oklab, ${flight.pilot?.color || "#2563eb"} 70%, #000))` }}>{flight.pilot?.initials || "—"}</div>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
-            {flight.pilot.name} <span className="mono muted" style={{ fontSize: 10 }}>· {flight.id}</span>
+            {flight.pilot?.name || flight.id} <span className="mono muted" style={{ fontSize: 10 }}>· {flight.id}</span>
           </div>
           <div style={{ fontSize: 10.5, color: "var(--text-3)" }}>{flight.area}</div>
         </div>
@@ -80,10 +93,10 @@ function FeedTile({ flight, index, onFocus, onPin }) {
 
       {/* tile foot — telemetry */}
       <div style={{ display: "flex", gap: 10, padding: "6px 10px", borderTop: "1px solid var(--border)", background: "var(--surface-2)", fontSize: 11 }} className="mono">
-        <span><Icon name="altitude" size={10}/> {flight.altitude}m</span>
-        <span><Icon name="pulse" size={10}/> {flight.speed.toFixed(1)}m/s</span>
-        <span style={{ color: flight.signal > 75 ? "var(--success)" : flight.signal > 50 ? "var(--warning)" : "var(--danger)" }}><Icon name="signal" size={10}/> {flight.signal}%</span>
-        <span><Icon name="battery" size={10}/> {flight.uav.battery}%</span>
+        <span><Icon name="altitude" size={10}/> {flight.altitude || 0}m</span>
+        <span><Icon name="pulse" size={10}/> {(flight.speed ?? 0).toFixed(1)}m/s</span>
+        <span style={{ color: flight.signal > 75 ? "var(--success)" : flight.signal > 50 ? "var(--warning)" : "var(--danger)" }}><Icon name="signal" size={10}/> {flight.signal ?? "—"}%</span>
+        <span><Icon name="battery" size={10}/> {flight.uav?.battery ?? "—"}%</span>
         <span className="muted" style={{ marginLeft: "auto" }}>{flight.duration}</span>
       </div>
     </div>
@@ -119,7 +132,7 @@ function MiniFeed({ flight, index }) {
         <div style={{ position: "absolute", top: -16, left: -2, background: "#ef4444", color: "white", fontFamily: "var(--font-mono)", fontSize: 8, padding: "1px 4px" }}>OBJ {(0.78 + index * 0.04).toFixed(2)}</div>
       </div>
       <div style={{ position: "absolute", inset: 0, color: "white", padding: 8, fontFamily: "var(--font-mono)", fontSize: 9, textShadow: "0 1px 2px rgba(0,0,0,0.6)", display: "flex", justifyContent: "space-between", alignItems: "flex-end", pointerEvents: "none" }}>
-        <span>{flight.lat.toFixed(3)}°N · {flight.lng.toFixed(3)}°E</span>
+        <span>{(flight.lat ?? 0).toFixed(3)}°N · {(flight.lng ?? 0).toFixed(3)}°E</span>
         <span>EO/IR · 1080p</span>
       </div>
     </div>

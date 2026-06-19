@@ -6,6 +6,7 @@ const { useState: fhUseState, useMemo: fhUseMemo, useEffect: fhUseEffect } = Rea
 function FlightHubView({ basemap, setBasemap, onStartFlight, onOpenStream, onEmergencyLaunched }) {
   const [emergencyOpen, setEmergencyOpen] = fhUseState(false);
   const [myLoc, setMyLoc] = fhUseState(null);
+  const [mapExpanded, setMapExpanded] = fhUseState(false);
 
   // Request the operator's real device location and show it on the map.
   fhUseEffect(() => {
@@ -28,7 +29,15 @@ function FlightHubView({ basemap, setBasemap, onStartFlight, onOpenStream, onEme
   // Label the operator's own position with their readable pilot ID (+ name).
   const me = (window.TEAM_ROSTER || []).find(m => m.id === window.__poUser?.id);
   const meLabel = me ? `${me.shortId || ""} ${me.name}`.trim() : (window.__poUser?.name || "You");
-  const myPin = myLoc ? [{ lat: myLoc.lat, lng: myLoc.lng, kind: "drone", color: "var(--accent)", label: meLabel }] : [];
+  // Show the operator as an active drone only while they're actually flying a
+  // mission; otherwise a static "inactive" marker.
+  const iAmFlying = (ACTIVE_FLIGHTS || []).some(f => f.pilot?.id === window.__poUser?.id);
+  const myPin = myLoc ? [{
+    lat: myLoc.lat, lng: myLoc.lng,
+    kind: iAmFlying ? "drone" : "pin",
+    color: iAmFlying ? "var(--accent)" : "#94a3b8", size: 7,
+    label: `${meLabel} · ${iAmFlying ? "active" : "inactive"}`,
+  }] : [];
   const canFly = !window.hasPerm || window.hasPerm("flight.create");
 
   return (
@@ -59,8 +68,10 @@ function FlightHubView({ basemap, setBasemap, onStartFlight, onOpenStream, onEme
               <div className="card-sub">Real-time positions · updated every 2s</div>
             </div>
             <div className="row" style={{ marginLeft: "auto", gap: 6 }}>
-              <span className="badge badge-live"><span className="dot"/>{ACTIVE_FLIGHTS.length} LIVE</span>
-              <button className="btn btn-sm btn-ghost"><Icon name="expand" size={13}/></button>
+              {ACTIVE_FLIGHTS.length > 0
+                ? <span className="badge badge-live"><span className="dot"/>{ACTIVE_FLIGHTS.length} LIVE</span>
+                : <span className="badge"><span className="dot" style={{ background: "#94a3b8" }}/>Inactive</span>}
+              <button className="btn btn-sm btn-ghost" title="Expand map" onClick={() => setMapExpanded(true)}><Icon name="expand" size={13}/></button>
             </div>
           </div>
           <MapCanvas basemap={basemap} pins={[...myPin, ...flightPins, ...stationPins]} height={420} onBasemapChange={setBasemap}/>
@@ -146,6 +157,13 @@ function FlightHubView({ basemap, setBasemap, onStartFlight, onOpenStream, onEme
           onClose={() => setEmergencyOpen(false)}
           onLaunched={(entry) => onEmergencyLaunched && onEmergencyLaunched(entry)}/>
       )}
+
+      {/* Expanded (large) operations map */}
+      <Modal open={mapExpanded} onClose={() => setMapExpanded(false)} size="xl"
+        title="Live operations map"
+        subtitle={ACTIVE_FLIGHTS.length > 0 ? `${ACTIVE_FLIGHTS.length} active · ${STATIONS.length} stations` : "No active flights"}>
+        <MapCanvas basemap={basemap} pins={[...myPin, ...flightPins, ...stationPins]} height={560} onBasemapChange={setBasemap}/>
+      </Modal>
 
     </div>
   );
