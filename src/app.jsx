@@ -258,7 +258,7 @@ function useClickOutside(onClose) {
   }, []);
   return ref;
 }
-const POPOVER = { position: "absolute", top: "calc(100% + 8px)", right: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 10px 30px rgba(13,18,30,0.22)", zIndex: 1000, overflow: "hidden" };
+const POPOVER = { position: "absolute", top: "calc(100% + 8px)", right: 0, background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 10px 30px rgba(13,18,30,0.22)", zIndex: 1000, overflow: "hidden" };
 
 function NotificationsBell() {
   const [open, setOpen] = appUseState(false);
@@ -302,6 +302,17 @@ function NotificationsBell() {
   );
 }
 
+function SegBtn({ active, onClick, children }) {
+  return (
+    <button onClick={onClick} style={{
+      flex: 1, padding: "5px 6px", fontSize: 12, textTransform: "capitalize", cursor: "pointer",
+      borderRadius: 6, border: "1px solid " + (active ? "var(--accent)" : "var(--border)"),
+      background: active ? "var(--accent-soft)" : "transparent",
+      color: active ? "var(--accent)" : "var(--text-2)", fontWeight: active ? 600 : 500,
+    }}>{children}</button>
+  );
+}
+
 function SettingsMenu({ t, setTweak }) {
   const [open, setOpen] = appUseState(false);
   const ref = useClickOutside(() => setOpen(false));
@@ -309,22 +320,23 @@ function SettingsMenu({ t, setTweak }) {
     <div ref={ref} style={{ position: "relative" }}>
       <button className="iconbtn hide-narrow" title="Settings" onClick={() => setOpen(o => !o)}><Icon name="settings" size={16}/></button>
       {open && (
-        <div style={{ ...POPOVER, width: 240, padding: 8 }}>
+        <div style={{ ...POPOVER, width: 244, padding: 8 }}>
           <div style={{ padding: "4px 8px", fontSize: 11, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Appearance</div>
           <div style={{ padding: "6px 8px" }}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>Theme</div>
-            <div className="row" style={{ gap: 4 }}>
-              {["light", "dark", "hc"].map(m => <button key={m} className={"btn btn-sm " + (t.theme === m ? "btn-primary" : "btn-ghost")} onClick={() => setTweak("theme", m)} style={{ flex: 1, textTransform: "capitalize" }}>{m === "hc" ? "Contrast" : m}</button>)}
+            <div style={{ fontSize: 12, marginBottom: 6, color: "var(--text)" }}>Theme</div>
+            <div style={{ display: "flex", gap: 4 }}>
+              {["light", "dark", "hc"].map(m => <SegBtn key={m} active={t.theme === m} onClick={() => setTweak("theme", m)}>{m === "hc" ? "Contrast" : m}</SegBtn>)}
             </div>
           </div>
           <div style={{ padding: "6px 8px" }}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>Density</div>
-            <div className="row" style={{ gap: 4 }}>
-              {["compact", "regular", "comfy"].map(d => <button key={d} className={"btn btn-sm " + (t.density === d ? "btn-primary" : "btn-ghost")} onClick={() => setTweak("density", d)} style={{ flex: 1, textTransform: "capitalize" }}>{d}</button>)}
+            <div style={{ fontSize: 12, marginBottom: 6, color: "var(--text)" }}>Density</div>
+            <div style={{ display: "flex", gap: 4 }}>
+              {["compact", "regular", "comfy"].map(d => <SegBtn key={d} active={t.density === d} onClick={() => setTweak("density", d)}>{d}</SegBtn>)}
             </div>
           </div>
           <div style={{ borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 6 }}>
-            <button className="btn btn-ghost" style={{ width: "100%", justifyContent: "flex-start" }} onClick={async () => { if (confirm("Sign out of Pilot Ops?")) { try { await supabase.auth.signOut(); } catch {} window.location.href = "/login.html"; } }}>
+            <button onClick={async () => { if (confirm("Sign out of Pilot Ops?")) { try { await supabase.auth.signOut(); } catch {} window.location.href = "/login.html"; } }}
+              style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 8px", fontSize: 12.5, cursor: "pointer", borderRadius: 6, border: "none", background: "transparent", color: "var(--danger)", fontWeight: 500 }}>
               <Icon name="logout" size={13}/> Sign out
             </button>
           </div>

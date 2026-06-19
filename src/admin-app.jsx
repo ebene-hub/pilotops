@@ -175,6 +175,54 @@ function AdminThemeToggle() {
   );
 }
 
+function AdminNotificationsBell() {
+  const [open, setOpen] = aaAppUseState(false);
+  const [items, setItems] = aaAppUseState([]);
+  const ref = aaAppUseState(() => ({ current: null }))[0];
+  aaAppUseEffect(() => {
+    function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+  async function toggle() {
+    const next = !open; setOpen(next);
+    if (next && window.__supabase) {
+      const { data } = await window.__supabase.from("notifications").select("type,payload,created_at").order("created_at", { ascending: false }).limit(15);
+      setItems(data || []);
+    }
+  }
+  const label = (n) => { const p = n.payload || {};
+    if (n.type === "mission_start") return `Mission started · ${p.flight || ""}`;
+    if (n.type === "emergency") return `Emergency launch · ${p.flight || ""}`;
+    if (n.type === "incident") return `Incident logged${p.severity ? " · " + p.severity : ""}`;
+    if (n.type === "summary") return `Post-flight summary sent · ${p.flight || ""}`;
+    if (n.type === "invite") return `Invite sent · ${p.email || ""}`;
+    return n.type; };
+  const rt = (ts) => { const d = Date.now() - new Date(ts).getTime(); if (d < 60000) return "just now"; if (d < 3600000) return Math.floor(d / 60000) + "m ago"; if (d < 86400000) return Math.floor(d / 3600000) + "h ago"; return Math.floor(d / 86400000) + "d ago"; };
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button className="iconbtn" title="Notifications" onClick={toggle}><Icon name="bell" size={16}/><span className="dot"/></button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 320, background: "var(--surface)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 10px 30px rgba(13,18,30,0.22)", zIndex: 1000, overflow: "hidden" }}>
+          <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", fontWeight: 600, fontSize: 13, color: "var(--text)" }}>Notifications</div>
+          <div style={{ maxHeight: 360, overflowY: "auto" }}>
+            {items.length === 0 ? <div className="muted" style={{ padding: 20, textAlign: "center", fontSize: 12.5 }}>No notifications yet.</div>
+              : items.map((n, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 7, background: n.type === "emergency" ? "color-mix(in oklab, var(--danger) 12%, transparent)" : "var(--accent-soft)", color: n.type === "emergency" ? "var(--danger)" : "var(--accent)", display: "grid", placeItems: "center", flexShrink: 0 }}><Icon name={n.type === "emergency" || n.type === "incident" ? "warn" : n.type === "summary" ? "mail" : "drone"} size={13}/></div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, color: "var(--text)" }}>{label(n)}</div>
+                    <div className="muted mono" style={{ fontSize: 10.5, marginTop: 2 }}>{rt(n.created_at)}</div>
+                  </div>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminTopbar({ crumbs, onMobileMenu }) {
   return (
     <header className="topbar">
@@ -193,10 +241,7 @@ function AdminTopbar({ crumbs, onMobileMenu }) {
       <a href="/" className="btn hide-narrow" style={{ textDecoration: "none" }}>
         <Icon name="arrowLeft" size={13}/> Pilot Ops
       </a>
-      <button className="iconbtn" title="Notifications">
-        <Icon name="bell" size={16}/>
-        <span className="dot"/>
-      </button>
+      <AdminNotificationsBell/>
       <AdminThemeToggle/>
       <div className="vdivider hide-narrow" style={{ height: 22 }}/>
       <div className="user-avatar" style={{ background: "linear-gradient(135deg, #1e293b, #0f172a)" }}>DK</div>
