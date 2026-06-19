@@ -200,31 +200,52 @@ function MediaPicker({ open, onClose, onConfirm, alreadySelected = [] }) {
 
 /* ---------- Default editable doc ---------- */
 function defaultDoc(f) {
+  const pilotName = f?.pilot?.name || (typeof f?.pilot === "string" ? f.pilot : "—");
+  const uavId = f?.uav?.id || "—";
+  const area = f?.area || "the coverage area";
   return {
-    headline: f.area,
-    meta: `${f.id} · ${f.pilot.name} · Jun 3, 2026 08:30–09:18 (00:48:12)`,
-    intro: `The 48-minute sweep of the ${f.area} was completed without incident. UAV ${f.uav.id} covered ${f.coverageKm} km² across 6 waypoints with no telemetry loss above the 5-second threshold.`,
-    findings: [
-      "INC-0412 · Heat anomaly at 12.487°N, 9.231°E — flagged as possible vehicle. Visual confirmation captured at 08:18.",
-      "INC-0413 · Vegetation encroachment along Loop Rd north — 14m segment requires clearance crew dispatch.",
-      "No insulator or conductor abnormalities along Span 18–22.",
-    ],
-    actions: [
-      "Schedule follow-up sweep at INC-0412 within 24 hours.",
-      "Dispatch maintenance crew for vegetation clearance (est. 4 hours).",
-    ],
-    signoff: "Filed by " + f.pilot.name,
-    mediaIds: ["MED-1023", "MED-1022", "MED-1024"],
+    headline: f?.area || "Flight summary",
+    meta: `${f?.id || "—"} · ${pilotName}`,
+    intro: `Summary of mission ${f?.id || ""}${f?.area ? " — sweep of " + area : ""} flown with UAV ${uavId}. Edit this draft before sending.`,
+    findings: [],
+    actions: [],
+    signoff: "Filed by " + pilotName,
+    mediaIds: [],
   };
 }
 
 /* ---------- Main view ---------- */
 function SummaryEmailView({ flight }) {
-  const f = flight || ACTIVE_FLIGHTS[0];
-  const recipients = STAKEHOLDERS.filter(s => s.notify.includes("summary"));
+  // Post-flight summary: use the passed/active flight, else the most recent
+  // completed flight so there's always something to summarize.
+  const f = flight || ACTIVE_FLIGHTS[0] || RECENT_FLIGHTS[0];
   const toast = useToast();
+  // Recipients seed from admin-managed stakeholders (those who get summaries);
+  // the pilot can also add ad-hoc emails before sending.
+  const [recipients, setRecipients] = seUseState(() =>
+    (STAKEHOLDERS || []).filter(s => (s.notify || []).includes("summary")).map(s => ({ id: s.id, name: s.name, email: s.email, avatar: s.avatar })));
+  const [emailDraft, setEmailDraft] = seUseState("");
+  const [sending, setSending] = seUseState(false);
 
-  const storageKey = `po:summary:${f.id}`;
+  function addRecipient() {
+    const e = emailDraft.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) { toast({ kind: "warn", title: "Invalid email", msg: e || "Enter an email address." }); return; }
+    if (recipients.some(r => (r.email || "").toLowerCase() === e.toLowerCase())) { setEmailDraft(""); return; }
+    setRecipients(prev => [...prev, { id: "adhoc-" + Date.now(), name: e.split("@")[0], email: e, avatar: "#64748b" }]);
+    setEmailDraft("");
+  }
+  function removeRecipient(id) { setRecipients(prev => prev.filter(r => r.id !== id)); }
+
+  async function sendSummary() {
+    if (!recipients.length) { toast({ kind: "warn", title: "No recipients", msg: "Add at least one recipient email." }); return; }
+    setSending(true);
+    await window.__supabase.from("notifications").insert({ type: "summary", payload: { flight: f?.id }, recipients: recipients.map(r => r.email) });
+    setSending(false);
+    toast({ kind: "success", title: "Summary sent", msg: `${recipients.length} recipient${recipients.length === 1 ? "" : "s"} notified.` });
+  }
+  function downloadPdf() { window.print(); }
+
+  const storageKey = `po:summary:${f?.id || "none"}`;
   const [doc, setDoc] = seUseState(() => {
     try {
       const raw = localStorage.getItem(storageKey);
@@ -278,6 +299,18 @@ function SummaryEmailView({ flight }) {
     }
   }
 
+  if (!f) return (
+    <div className="main-content" style={{ display: "grid", placeItems: "center", minHeight: 480 }}>
+      <div className="card" style={{ maxWidth: 440, textAlign: "center" }}>
+        <div className="card-body" style={{ padding: 40 }}>
+          <Icon name="mail" size={32} stroke="var(--text-3)"/>
+          <h2 style={{ fontSize: 18, marginTop: 12 }}>No flight to summarize</h2>
+          <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>End a mission, or open a completed flight from the Flight log archive, to generate its post-flight summary.</div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="main-content">
       <style>{`
@@ -325,9 +358,9 @@ function SummaryEmailView({ flight }) {
         </div>
         <div className="page-actions">
           <button className="btn" onClick={resetDoc} title="Restore the auto-generated draft"><Icon name="refresh" size={14}/> Reset to draft</button>
-          <button className="btn"><Icon name="download" size={14}/> Download PDF</button>
-          <button className="btn btn-primary" onClick={() => toast({ kind: "success", title: "Summary sent", msg: `${recipients.length} recipients notified.` })}>
-            <Icon name="send" size={14}/> Send to {recipients.length}
+          <button className="btn" onClick={downloadPdf}><Icon name="download" size={14}/> Download PDF</button>
+          <button className="btn btn-primary" onClick={sendSummary} disabled={sending || !recipients.length} title={!recipients.length ? "Add a recipient first" : "Send summary"}>
+            <Icon name="send" size={14}/> {sending ? "Sending…" : `Send to ${recipients.length}`}
           </button>
         </div>
       </div>
@@ -378,7 +411,7 @@ function SummaryEmailView({ flight }) {
                   {/* KPI strip */}
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, margin: "20px 0", padding: 14, background: "#f7f8fa", borderRadius: 10, border: "1px solid #e6e8ee" }}>
                     {[
-                      ["Coverage", f.coverageKm + " km²"],
+                      ["Coverage", (f.coverageKm ?? "—") + " km²"],
                       ["Avg altitude", f.altitude + " m"],
                       ["Incidents", "2 flagged"],
                       ["Footage", "48m 12s"],
@@ -511,14 +544,23 @@ function SummaryEmailView({ flight }) {
             <div style={{ padding: 4 }}>
               {recipients.map(r => (
                 <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8 }}>
-                  <div className="user-avatar" style={{ width: 28, height: 28, fontSize: 11, background: `linear-gradient(135deg, ${r.avatar}, color-mix(in oklab, ${r.avatar} 70%, #000))` }}>{r.name.split(" ").map(w => w[0]).slice(0, 2).join("")}</div>
+                  <div className="user-avatar" style={{ width: 28, height: 28, fontSize: 11, background: `linear-gradient(135deg, ${r.avatar || "#64748b"}, color-mix(in oklab, ${r.avatar || "#64748b"} 70%, #000))` }}>{(r.name || r.email).split(/[\s@]/).map(w => w[0]).slice(0, 2).join("").toUpperCase()}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 12.5, fontWeight: 500 }}>{r.name}</div>
                     <div className="muted mono" style={{ fontSize: 10.5 }}>{r.email}</div>
                   </div>
-                  <Icon name="check" size={14} style={{ color: "var(--success)" }}/>
+                  <button className="iconbtn" style={{ width: 24, height: 24 }} onClick={() => removeRecipient(r.id)} title="Remove"><Icon name="x" size={12}/></button>
                 </div>
               ))}
+              {recipients.length === 0 && (
+                <div className="muted" style={{ fontSize: 12, padding: "10px 12px", lineHeight: 1.5 }}>
+                  No recipients yet. Add emails below, or set who gets summaries in <strong>Admin → Stakeholders</strong>.
+                </div>
+              )}
+              <div className="row" style={{ gap: 6, padding: "8px 10px" }}>
+                <input className="input" placeholder="Add recipient email…" value={emailDraft} onChange={e => setEmailDraft(e.target.value)} onKeyDown={e => e.key === "Enter" && addRecipient()} style={{ flex: 1 }}/>
+                <button className="btn btn-sm btn-primary" onClick={addRecipient}><Icon name="plus" size={12}/> Add</button>
+              </div>
             </div>
           </div>
 

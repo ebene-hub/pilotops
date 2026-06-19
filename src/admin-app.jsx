@@ -14,6 +14,7 @@ const ADMIN_NAV = [
     { id: "members",       label: "Members & invites",     icon: "users" },
     { id: "team",          label: "Team roster",           icon: "users" },
     { id: "roles",         label: "Roles & permissions",   icon: "shield" },
+    { id: "stakeholders",  label: "Stakeholders",          icon: "mail" },
   ]},
   { group: "Fleet management", items: [
     { id: "aircraft",      label: "Aircraft registry",     icon: "drone" },
@@ -35,6 +36,7 @@ const ADMIN_TITLES = {
   members:            ["Organization",      "Members & invites"],
   team:               ["Organization",      "Team roster"],
   roles:         ["Organization",      "Roles & permissions"],
+  stakeholders:  ["Organization",      "Stakeholders"],
   aircraft:      ["Fleet management",  "Aircraft registry"],
   fields:        ["Workflows",         "Mission form fields"],
   notifications: ["Workflows",         "Notification rules"],
@@ -209,6 +211,7 @@ function AdminViewRenderer({ view, teamRoster, setTeamRoster, fieldConfig, setFi
     case "members":            return <AdminPage title="Members & invites" sub="Everyone who can sign in to Pilot Ops. Invite new members by email — they register via a single-use link."><MembersInvitesView/></AdminPage>;
     case "team":               return <AdminPage title="Team roster" sub="Field crew and pilot codes. Pilots pick from this list when starting a mission — codes prevent impersonation."><TeamRosterTab teamRoster={teamRoster} setTeamRoster={setTeamRoster}/></AdminPage>;
     case "roles":         return <AdminPage title="Roles & permissions" sub="What each role can read, write, or approve."><RolesView/></AdminPage>;
+    case "stakeholders":  return <AdminPage title="Stakeholders & recipients" sub="External people who receive notifications and post-flight summaries by email — they are not app users."><StakeholdersView/></AdminPage>;
     case "aircraft":      return <AdminAircraftView/>;
     case "fields":        return <AdminPage title="Mission form fields" sub="Configure what pilots fill in when starting a mission."><FormFieldsTab fieldConfig={fieldConfig} setFieldConfig={setFieldConfig}/></AdminPage>;
     case "notifications": return <AdminPage title="Notification rules" sub="Who gets notified, when, and via which channel."><NotificationsView/></AdminPage>;
@@ -432,131 +435,6 @@ function RoleEditModal({ role, allPerms, onClose, onSave }) {
               <span style={{ flex: 1 }}>{p.l}</span>
               <span className="mono" style={{ fontSize: 10, color: "var(--text-3)" }}>{p.v}</span>
             </label>
-          );
-        })}
-      </div>
-    </Modal>
-  );
-}
-
-function StakeholdersView() {
-  const toast = useToast();
-  const [list, setList] = React.useState(STAKEHOLDERS);
-  const [editing, setEditing] = React.useState(null);
-  const [menuFor, setMenuFor] = React.useState(null);
-
-  function save(patch) {
-    if (editing._new) {
-      const id = "S-" + String(list.length + 1).padStart(3, "0");
-      setList(prev => [...prev, { ...patch, id, avatar: "#" + Math.floor(Math.random()*0xffffff).toString(16).padStart(6,"0") }]);
-      toast({ kind: "success", title: "Stakeholder added", msg: `${patch.name} will start receiving notifications.` });
-    } else {
-      setList(prev => prev.map(s => s.id === editing.id ? { ...s, ...patch } : s));
-      toast({ kind: "success", title: "Stakeholder updated", msg: patch.name });
-    }
-    setEditing(null);
-  }
-  function remove(s) {
-    if (!confirm(`Remove ${s.name} from stakeholders? They will stop receiving notifications.`)) return;
-    setList(prev => prev.filter(x => x.id !== s.id));
-    toast({ kind: "info", title: "Stakeholder removed", msg: s.name });
-    setMenuFor(null);
-  }
-
-  return (
-    <div className="card">
-      <div className="card-head">
-        <div className="card-title">All stakeholders</div>
-        <span className="muted" style={{ fontSize: 12, marginLeft: 6 }}>{list.length} active</span>
-        <div className="page-actions" style={{ marginLeft: "auto" }}>
-          <button className="btn btn-primary" onClick={() => setEditing({ _new: true, name: "", email: "", role: "Director", notify: ["email"] })}>
-            <Icon name="plus" size={13}/> Add stakeholder
-          </button>
-        </div>
-      </div>
-      <div style={{ overflowX: "auto" }}>
-        <table className="tbl">
-          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Notifications</th><th>Status</th><th></th></tr></thead>
-          <tbody>
-            {list.map(s => (
-              <tr key={s.id} className="clickable" onClick={() => setEditing(s)}>
-                <td>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div className="user-avatar" style={{ width: 30, height: 30, fontSize: 11, background: `linear-gradient(135deg, ${s.avatar}, color-mix(in oklab, ${s.avatar} 70%, #000))` }}>{s.name.split(" ").map(w => w[0]).slice(0, 2).join("")}</div>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{s.name}</div>
-                  </div>
-                </td>
-                <td className="mono" style={{ fontSize: 12 }}>{s.email}</td>
-                <td><span className="pill">{s.role}</span></td>
-                <td><div className="row" style={{ gap: 4 }}>{s.notify.map(n => <span key={n} className="badge" style={{ fontSize: 10 }}>{n}</span>)}</div></td>
-                <td><span className="badge badge-success"><span className="dot"/>Active</span></td>
-                <td style={{ position: "relative" }} onClick={e => e.stopPropagation()}>
-                  <button className="btn btn-sm btn-ghost" onClick={() => setMenuFor(menuFor === s.id ? null : s.id)}><Icon name="more" size={13}/></button>
-                  {menuFor === s.id && (
-                    <div style={{ position: "absolute", right: 8, top: "100%", zIndex: 30, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, boxShadow: "var(--shadow-md)", padding: 4, minWidth: 160 }}>
-                      <button className="btn btn-sm btn-ghost" style={{ width: "100%", justifyContent: "flex-start" }} onClick={() => { setEditing(s); setMenuFor(null); }}><Icon name="edit" size={12}/> Edit</button>
-                      <button className="btn btn-sm btn-ghost" style={{ width: "100%", justifyContent: "flex-start" }} onClick={() => { toast({ kind: "info", title: "Test email sent", msg: `Test to ${s.email}` }); setMenuFor(null); }}><Icon name="send" size={12}/> Send test</button>
-                      <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }}/>
-                      <button className="btn btn-sm btn-ghost" style={{ width: "100%", justifyContent: "flex-start", color: "var(--danger)" }} onClick={() => remove(s)}><Icon name="trash" size={12}/> Remove</button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {editing && <StakeholderEditModal stakeholder={editing} onClose={() => setEditing(null)} onSave={save}/>}
-    </div>
-  );
-}
-
-function StakeholderEditModal({ stakeholder, onClose, onSave }) {
-  const [name, setName] = React.useState(stakeholder.name);
-  const [email, setEmail] = React.useState(stakeholder.email);
-  const [role, setRole] = React.useState(stakeholder.role);
-  const [notify, setNotify] = React.useState(new Set(stakeholder.notify));
-  const channels = ["email", "sms", "slack", "app push", "webhook"];
-  function toggle(c) {
-    setNotify(prev => { const n = new Set(prev); n.has(c) ? n.delete(c) : n.add(c); return n; });
-  }
-  return (
-    <Modal open onClose={onClose} icon="mail" size="md"
-      title={stakeholder._new ? "Add stakeholder" : `Edit ${stakeholder.name}`}
-      subtitle="Stakeholders receive notifications about flights, incidents, and summaries."
-      footer={<>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-primary" disabled={!name.trim() || !email.trim()}
-          onClick={() => onSave({ name: name.trim(), email: email.trim(), role, notify: [...notify] })}>
-          <Icon name="check" size={13}/> {stakeholder._new ? "Add stakeholder" : "Save"}
-        </button>
-      </>}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-        <div className="field">
-          <label className="field-label">Full name</label>
-          <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Maria Santos"/>
-        </div>
-        <div className="field">
-          <label className="field-label">Role</label>
-          <select className="select" value={role} onChange={e => setRole(e.target.value)}>
-            <option>Director</option><option>Safety</option><option>Command</option><option>Legal</option><option>External</option><option>Field</option>
-          </select>
-        </div>
-      </div>
-      <div className="field" style={{ marginBottom: 14 }}>
-        <label className="field-label">Email</label>
-        <input className="input mono" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@pilotops.io"/>
-      </div>
-      <label className="field-label" style={{ display: "block", marginBottom: 8 }}>Notification channels ({notify.size})</label>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-        {channels.map(c => {
-          const on = notify.has(c);
-          return (
-            <button key={c} type="button" onClick={() => toggle(c)}
-              className="pill" style={{ cursor: "pointer", background: on ? "var(--accent-soft)" : "var(--surface)", color: on ? "var(--accent)" : "var(--text-2)", borderColor: on ? "var(--accent)" : "var(--border)" }}>
-              {on && <Icon name="check" size={10}/>} {c}
-            </button>
           );
         })}
       </div>
@@ -966,6 +844,129 @@ function AuditView() {
         </div>
       </div>
     </>
+  );
+}
+
+/* ---------- Stakeholders (external email recipients) ---------- */
+const NOTIFY_KINDS = [
+  { v: "pre-flight", l: "Pre-flight notices" },
+  { v: "incidents",  l: "Incident reports" },
+  { v: "summary",    l: "Post-flight summaries" },
+];
+
+function StakeholdersView() {
+  const toast = useToast();
+  const [list, setList] = React.useState(() => (window.STAKEHOLDERS || []));
+  const [editing, setEditing] = React.useState(null);
+
+  async function save(s) {
+    const sb = window.__supabase;
+    const row = { name: s.name, email: s.email, role: s.role || "External", notify: s.notify || [] };
+    if (s.id) {
+      const { error } = await sb.from("stakeholders").update(row).eq("id", s.id);
+      if (error) { toast({ kind: "warn", title: "Save failed", msg: error.message }); return; }
+      setList(prev => prev.map(x => x.id === s.id ? { ...x, ...row } : x));
+    } else {
+      const { data, error } = await sb.from("stakeholders").insert(row).select().single();
+      if (error) { toast({ kind: "warn", title: "Add failed", msg: error.message }); return; }
+      setList(prev => [...prev, { ...data, notify: data.notify || [], avatar: data.avatar || "#64748b" }]);
+    }
+    try { await refresh(); } catch {}
+    setEditing(null);
+    toast({ kind: "success", title: "Stakeholder saved", msg: s.name });
+  }
+  async function remove(s) {
+    if (!confirm(`Remove ${s.name} from notification recipients?`)) return;
+    await window.__supabase.from("stakeholders").delete().eq("id", s.id);
+    setList(prev => prev.filter(x => x.id !== s.id));
+    try { await refresh(); } catch {}
+    toast({ kind: "info", title: "Removed", msg: s.name });
+  }
+
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+        <button className="btn btn-primary" onClick={() => setEditing({ _new: true, name: "", email: "", role: "External", notify: ["summary"] })}>
+          <Icon name="plus" size={13}/> Add stakeholder
+        </button>
+      </div>
+      <div className="card">
+        <div style={{ overflowX: "auto" }}>
+          <table className="tbl">
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Receives</th><th></th></tr></thead>
+            <tbody>
+              {list.map(s => (
+                <tr key={s.id}>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div className="user-avatar" style={{ width: 28, height: 28, fontSize: 11, background: `linear-gradient(135deg, ${s.avatar || "#64748b"}, color-mix(in oklab, ${s.avatar || "#64748b"} 70%, #000))` }}>{(s.name || s.email).split(/[\s@]/).map(w => w[0]).slice(0, 2).join("").toUpperCase()}</div>
+                      <span style={{ fontWeight: 600, fontSize: 13 }}>{s.name}</span>
+                    </div>
+                  </td>
+                  <td className="mono" style={{ fontSize: 12 }}>{s.email}</td>
+                  <td><span className="pill">{s.role}</span></td>
+                  <td>
+                    <div className="row" style={{ gap: 4, flexWrap: "wrap" }}>
+                      {(s.notify || []).length === 0 ? <span className="muted" style={{ fontSize: 11 }}>—</span>
+                        : (s.notify || []).map(n => <span key={n} className="badge mono" style={{ fontSize: 10 }}>{n}</span>)}
+                    </div>
+                  </td>
+                  <td>
+                    <div className="row" style={{ gap: 4 }}>
+                      <button className="btn btn-sm btn-ghost" onClick={() => setEditing(s)} title="Edit"><Icon name="edit" size={13}/></button>
+                      <button className="btn btn-sm btn-ghost" onClick={() => remove(s)} title="Remove"><Icon name="trash" size={13}/></button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {list.length === 0 && <div className="muted" style={{ padding: 40, textAlign: "center" }}>No stakeholders yet. Add the people who should receive notices and summaries by email.</div>}
+        </div>
+      </div>
+      {editing && <StakeholderModal stakeholder={editing} onClose={() => setEditing(null)} onSave={save}/>}
+    </>
+  );
+}
+
+function StakeholderModal({ stakeholder, onClose, onSave }) {
+  const [name, setName] = React.useState(stakeholder.name || "");
+  const [email, setEmail] = React.useState(stakeholder.email || "");
+  const [role, setRole] = React.useState(stakeholder.role || "External");
+  const [notify, setNotify] = React.useState(new Set(stakeholder.notify || []));
+  const valid = name.trim() && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
+
+  return (
+    <Modal open onClose={onClose} icon="mail" size="md"
+      title={stakeholder._new ? "Add stakeholder" : `Edit ${stakeholder.name}`}
+      subtitle="External recipient — receives notifications/summaries by email; not an app login."
+      footer={<>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={!valid} onClick={() => onSave({ id: stakeholder.id, name: name.trim(), email: email.trim(), role, notify: [...notify] })}>
+          <Icon name="check" size={13}/> Save
+        </button>
+      </>}>
+      <div className="grid-2" style={{ gap: 12 }}>
+        <div className="field"><label className="field-label">Name</label><input className="input" value={name} onChange={e => setName(e.target.value)} autoFocus/></div>
+        <div className="field"><label className="field-label">Role / org</label><input className="input" value={role} onChange={e => setRole(e.target.value)} placeholder="e.g. Insurance, Regulator"/></div>
+      </div>
+      <div className="field" style={{ marginTop: 12 }}>
+        <label className="field-label">Email</label>
+        <input className="input mono" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@example.com"/>
+      </div>
+      <label className="field-label" style={{ display: "block", marginTop: 14, marginBottom: 8 }}>Receives</label>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {NOTIFY_KINDS.map(k => {
+          const on = notify.has(k.v);
+          return (
+            <label key={k.v} style={{ display: "flex", gap: 9, alignItems: "center", padding: "8px 10px", border: `1px solid ${on ? "var(--accent)" : "var(--border)"}`, background: on ? "var(--accent-soft)" : "var(--surface)", borderRadius: 6, cursor: "pointer", fontSize: 12.5 }}>
+              <input type="checkbox" checked={on} onChange={() => setNotify(prev => { const n = new Set(prev); n.has(k.v) ? n.delete(k.v) : n.add(k.v); return n; })} style={{ accentColor: "var(--accent)" }}/>
+              <span style={{ fontWeight: 600 }}>{k.l}</span>
+            </label>
+          );
+        })}
+      </div>
+    </Modal>
   );
 }
 
