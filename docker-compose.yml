@@ -1,0 +1,50 @@
+# Pilot Ops — web + TLS reverse proxy.
+#
+# This serves the built SPA and terminates TLS. The Supabase backend (Postgres +
+# Auth + REST + Realtime + Storage behind the `kong` API gateway) runs from the
+# official self-hosting stack — see DEPLOY.md. Caddy proxies the Supabase API
+# paths to `kong` and everything else to the web container, so the whole app is
+# served from a single HTTPS origin (VITE_SUPABASE_URL = https://YOUR_DOMAIN).
+#
+# Bring up the Supabase stack first; it creates a docker network. Set
+# SUPABASE_NETWORK below to that network's name so Caddy can reach `kong`.
+
+services:
+  web:
+    build:
+      context: .
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
+    restart: unless-stopped
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - default
+      - supabase
+
+networks:
+  # The external network created by the official Supabase compose. Find it with
+  # `docker network ls` (e.g. "supabase_default") and set SUPABASE_NETWORK.
+  supabase:
+    external: true
+    name: ${SUPABASE_NETWORK:-supabase_default}
+
+volumes:
+  caddy_data:
+  caddy_config:

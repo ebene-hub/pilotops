@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en" data-brand="agris">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Sign in · Pilot Ops</title>
+  <link rel="stylesheet" href="/src/styles.css"/>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: var(--font-sans);
+      color: var(--text);
+      background: var(--bg);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+    .login-shell {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      min-height: 100vh;
+    }
+    @media (max-width: 900px) {
+      .login-shell { grid-template-columns: 1fr; }
+      .login-aside { display: none; }
+    }
+
+    /* Branding side */
+    .login-aside {
+      position: relative;
+      background:
+        radial-gradient(circle at 20% 20%, color-mix(in oklab, var(--accent) 25%, transparent), transparent 60%),
+        radial-gradient(circle at 80% 70%, color-mix(in oklab, #1e3a8a 30%, transparent), transparent 55%),
+        linear-gradient(135deg, #0f172a, #1e293b);
+      color: white;
+      display: flex;
+      flex-direction: column;
+      padding: 48px 56px;
+      overflow: hidden;
+    }
+    .login-aside::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+      background-size: 32px 32px;
+      mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+    }
+    .login-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: relative;
+      z-index: 1;
+    }
+    .login-brand .mark {
+      width: 38px; height: 38px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--accent), color-mix(in oklab, var(--accent) 70%, #000));
+      display: grid;
+      place-items: center;
+      color: white;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      font-size: 14px;
+    }
+    .login-brand .text {
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: 0.005em;
+    }
+    .login-brand .text small {
+      display: block;
+      font-size: 10px;
+      color: rgba(255,255,255,0.55);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-top: 2px;
+      font-weight: 600;
+    }
+
+    .login-aside-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      max-width: 460px;
+      position: relative;
+      z-index: 1;
+    }
+    .login-eyebrow {
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.55);
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    .login-headline {
+      font-size: 36px;
+      line-height: 1.12;
+      font-weight: 600;
+      letter-spacing: -0.015em;
+      margin: 0 0 18px;
+      text-wrap: pretty;
+    }
+    .login-sub {
+      font-size: 15px;
+      color: rgba(255,255,255,0.7);
+      line-height: 1.55;
+      margin: 0 0 28px;
+    }
+    .login-features {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .login-feature {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      font-size: 13px;
+      color: rgba(255,255,255,0.85);
+    }
+    .login-feature .ic {
+      width: 26px; height: 26px;
+      border-radius: 7px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .login-feature strong { display: block; font-weight: 600; color: white; margin-bottom: 2px; }
+
+    .login-aside-foot {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      gap: 24px;
+      font-size: 11.5px;
+      color: rgba(255,255,255,0.45);
+    }
+
+    /* Form side */
+    .login-main {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px;
+      background: var(--bg);
+    }
+    .login-card {
+      width: 100%;
+      max-width: 400px;
+    }
+    .login-mobile-brand {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 32px;
+    }
+    @media (max-width: 900px) {
+      .login-mobile-brand { display: flex; }
+    }
+    .login-mobile-brand .mark {
+      width: 34px; height: 34px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, var(--accent), color-mix(in oklab, var(--accent) 70%, #000));
+      display: grid; place-items: center;
+      color: white; font-weight: 700; font-family: var(--font-mono); font-size: 13px;
+    }
+
+    .login-title { font-size: 24px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em; }
+    .login-desc  { font-size: 13.5px; color: var(--text-2); margin: 0 0 28px; }
+
+    .field-stack { display: flex; flex-direction: column; gap: 16px; }
+    .input-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .input-wrap .input-ic {
+      position: absolute;
+      left: 12px;
+      pointer-events: none;
+      color: var(--text-3);
+    }
+    .input.with-ic { padding-left: 38px; }
+    .input.with-toggle { padding-right: 42px; }
+    .pwd-toggle {
+      position: absolute; right: 10px;
+      background: none; border: none;
+      color: var(--text-3); cursor: pointer;
+      padding: 4px; border-radius: 4px;
+      display: grid; place-items: center;
+    }
+    .pwd-toggle:hover { color: var(--text-2); background: var(--bg-muted); }
+
+    .remember-row {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 4px;
+    }
+    .remember-row label {
+      display: flex; align-items: center; gap: 7px;
+      font-size: 12.5px; color: var(--text-2); cursor: pointer;
+    }
+    .remember-row label input { accent-color: var(--accent); }
+    .remember-row a { font-size: 12.5px; color: var(--accent); text-decoration: none; font-weight: 500; }
+    .remember-row a:hover { text-decoration: underline; }
+
+    .login-submit {
+      width: 100%; height: 44px;
+      font-size: 14px; font-weight: 600;
+      margin-top: 4px;
+      justify-content: center;
+    }
+    .login-error {
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: color-mix(in oklab, var(--danger) 8%, transparent);
+      border: 1px solid color-mix(in oklab, var(--danger) 30%, transparent);
+      color: var(--danger);
+      font-size: 12.5px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+    }
+    .login-error.show { display: flex; }
+
+    .login-divider {
+      display: flex; align-items: center; gap: 12px;
+      margin: 24px 0;
+      font-size: 11px;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .login-divider::before, .login-divider::after {
+      content: ""; flex: 1; height: 1px; background: var(--border);
+    }
+    .sso-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .sso-btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      height: 40px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      border-radius: 8px;
+      font-size: 12.5px; font-weight: 500;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .sso-btn:hover { background: var(--bg-subtle); }
+
+    .login-foot {
+      margin-top: 28px;
+      font-size: 12.5px;
+      color: var(--text-2);
+      text-align: center;
+    }
+    .login-foot a { color: var(--accent); text-decoration: none; font-weight: 500; }
+    .login-foot a:hover { text-decoration: underline; }
+
+    .demo-hint {
+      margin-top: 20px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: var(--bg-subtle);
+      border: 1px dashed var(--border);
+      font-size: 11.5px;
+      color: var(--text-3);
+      line-height: 1.6;
+    }
+    .demo-hint strong { color: var(--text-2); }
+    .demo-hint .mono { font-family: var(--font-mono); font-weight: 600; color: var(--text); }
+    .demo-fill {
+      background: none; border: none; padding: 0; margin: 0;
+      color: var(--accent); cursor: pointer; font-size: 11.5px; text-decoration: underline;
+      font-family: inherit;
+    }
+
+    /* ---------- Invite registration mode ---------- */
+    .invite-banner {
+      padding: 14px 16px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 12%, transparent), color-mix(in oklab, var(--accent) 4%, transparent));
+      border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
+      margin-bottom: 24px;
+      display: flex; gap: 12px; align-items: flex-start;
+    }
+    .invite-banner .ic {
+      width: 36px; height: 36px;
+      border-radius: 9px;
+      background: var(--accent); color: white;
+      display: grid; place-items: center;
+      flex-shrink: 0;
+    }
+    .invite-banner-title { font-size: 13px; font-weight: 600; color: var(--text); }
+    .invite-banner-sub   { font-size: 12px; color: var(--text-2); margin-top: 3px; line-height: 1.5; }
+    .invite-roles { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+    .invite-role-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 8px; border-radius: 4px;
+      background: var(--accent); color: white;
+      font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .invite-message {
+      margin-top: 10px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.5);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px; color: var(--text-2);
+      font-style: italic; line-height: 1.5;
+    }
+
+    .invite-error {
+      padding: 18px;
+      text-align: center;
+      border-radius: 10px;
+      background: color-mix(in oklab, var(--danger) 6%, transparent);
+      border: 1px solid color-mix(in oklab, var(--danger) 25%, transparent);
+    }
+    .invite-error h3 { margin: 8px 0 6px; font-size: 16px; color: var(--danger); }
+    .invite-error p { font-size: 13px; color: var(--text-2); margin: 0 0 16px; line-height: 1.55; }
+
+    /* Pilot code reveal screen */
+    .code-reveal {
+      padding: 28px 24px;
+      text-align: center;
+    }
+    .code-reveal .check {
+      width: 56px; height: 56px;
+      margin: 0 auto 16px;
+      border-radius: 50%;
+      background: color-mix(in oklab, var(--success) 14%, transparent);
+      color: var(--success);
+      display: grid; place-items: center;
+    }
+    .code-reveal h2 { font-size: 20px; margin: 0 0 6px; }
+    .code-reveal p  { font-size: 13px; color: var(--text-2); margin: 0 0 22px; }
+    .code-display {
+      display: flex; gap: 8px; justify-content: center;
+      margin-bottom: 14px;
+    }
+    .code-digit {
+      width: 52px; height: 64px;
+      border: 2px solid var(--accent);
+      background: var(--accent-soft);
+      border-radius: 10px;
+      display: grid; place-items: center;
+      font-family: var(--font-mono);
+      font-size: 30px; font-weight: 700;
+      color: var(--accent);
+    }
+    .code-warning {
+      padding: 10px 12px;
+      border-radius: 6px;
+      background: color-mix(in oklab, var(--warning) 10%, transparent);
+      border: 1px solid color-mix(in oklab, var(--warning) 30%, transparent);
+      font-size: 11.5px; color: var(--text-2);
+      display: flex; gap: 8px; align-items: flex-start;
+      text-align: left; line-height: 1.5;
+      margin-bottom: 18px;
+    }
+    .code-warning svg { color: var(--warning); flex-shrink: 0; margin-top: 1px; }
+
+    .loading-spin {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+<script>(function(){try{var t=localStorage.getItem("po:theme");if(!t&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+</head>
+<body>
+  <div class="login-shell">
+
+    <!-- Branding side -->
+    <aside class="login-aside">
+      <div class="login-brand">
+        <div class="mark">PO</div>
+        <div class="text">
+          Pilot Ops
+          <small>Central Intelligence Reporting</small>
+        </div>
+      </div>
+
+      <div class="login-aside-content">
+        <div class="login-eyebrow">For pilots & dispatchers</div>
+        <h1 class="login-headline">Every flight logged. Every mission accounted for.</h1>
+        <p class="login-sub">
+          The operational dashboard for drone pilots — pre-flight checklists, live streaming, post-flight summaries, and a logbook that audits itself.
+        </p>
+        <div class="login-features">
+          <div class="login-feature">
+            <div class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+            <div><strong>Anti-impersonation guards</strong>6-digit pilot codes verify identity before any launch.</div>
+          </div>
+          <div class="login-feature">
+            <div class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>
+            <div><strong>Real-time situational awareness</strong>Live map, telemetry, and a livestream from every aircraft in the sky.</div>
+          </div>
+          <div class="login-feature">
+            <div class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg></div>
+            <div><strong>Compliance built in</strong>Part 107 currency, BVLOS waivers, and medical tracking with proactive alerts.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="login-aside-foot">
+        <span>© 2026 Pilot Ops</span>
+        <a href="#" style="color: inherit; text-decoration: none;">Status</a>
+        <a href="#" style="color: inherit; text-decoration: none;">Support</a>
+        <a href="#" style="color: inherit; text-decoration: none;">Privacy</a>
+      </div>
+    </aside>
+
+    <!-- Form side -->
+    <main class="login-main">
+      <div class="login-card">
+        <div class="login-mobile-brand">
+          <div class="mark">PO</div>
+          <div style="font-size: 15px; font-weight: 600;">Pilot Ops</div>
+        </div>
+
+        <h2 class="login-title" id="page-title">Sign in</h2>
+        <p class="login-desc" id="page-desc">Access your missions, logbook, and live operations.</p>
+
+        <!-- Invite banner (shown when ?invite=<token> is valid) -->
+        <div id="invite-banner" class="invite-banner" style="display: none;">
+          <div class="ic">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M20 8v6M23 11h-6"/></svg>
+          </div>
+          <div style="flex: 1; min-width: 0;">
+            <div class="invite-banner-title" id="invite-banner-title"></div>
+            <div class="invite-banner-sub"  id="invite-banner-sub"></div>
+            <div class="invite-roles"       id="invite-roles"></div>
+            <div class="invite-message"     id="invite-message" style="display: none;"></div>
+          </div>
+        </div>
+
+        <!-- Invalid invite screen -->
+        <div id="invite-error" class="invite-error" style="display: none;">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d93636" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+          <h3 id="invite-error-title">Invitation link invalid</h3>
+          <p  id="invite-error-msg">This invitation has expired or has already been used.</p>
+          <a href="/login.html" class="btn btn-primary">Sign in instead</a>
+        </div>
+
+        <!-- Success / pilot code reveal -->
+        <div id="code-reveal" class="code-reveal" style="display: none;">
+          <div class="check">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <h2>Welcome to Pilot Ops</h2>
+          <p id="code-reveal-name"></p>
+          <div id="code-display-wrap" style="display: none;">
+            <div style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-3); font-weight: 600; margin-bottom: 10px;">Your pilot code</div>
+            <div class="code-display" id="code-display"></div>
+            <div class="code-warning">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <span><strong style="color: var(--text);">Save this code now.</strong> You'll need it before every flight to verify identity. It is shown only once — if you lose it, an admin must reset it.</span>
+            </div>
+          </div>
+          <a href="/" class="btn btn-primary" style="width: 100%; justify-content: center; height: 44px;">
+            Continue to Pilot Ops &rarr;
+          </a>
+        </div>
+
+        <div id="error" class="login-error">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span id="error-msg">Incorrect email or password.</span>
+        </div>
+
+        <form id="login-form" class="field-stack" autocomplete="on">
+          <!-- Full name field, shown in invite mode only -->
+          <div class="field" id="name-field" style="display: none;">
+            <label class="field-label" for="fullname">Full name</label>
+            <div class="input-wrap">
+              <span class="input-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span>
+              <input id="fullname" class="input with-ic" type="text" autocomplete="name" placeholder="e.g. Maria Santos"/>
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="email">Work email</label>
+            <div class="input-wrap">
+              <span class="input-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></span>
+              <input id="email" class="input with-ic" type="email" name="email" required placeholder="you@pilotops.io" autocomplete="email"/>
+            </div>
+          </div>
+          <div class="field">
+            <label class="field-label" for="password"><span id="pwd-label">Password</span></label>
+            <div class="input-wrap">
+              <span class="input-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg></span>
+              <input id="password" class="input with-ic with-toggle" type="password" name="password" required placeholder="Enter your password" autocomplete="current-password"/>
+              <button type="button" class="pwd-toggle" id="pwd-toggle" aria-label="Show password">
+                <svg id="pwd-eye" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+            <div id="pwd-hint" class="field-hint" style="display: none; font-size: 11.5px; color: var(--text-3); margin-top: 6px;">At least 8 characters with one number.</div>
+          </div>
+
+          <div class="remember-row" id="remember-row">
+            <label><input type="checkbox" id="remember"/> Remember this device</label>
+            <a href="#">Forgot password?</a>
+          </div>
+
+          <button id="submit" type="submit" class="btn btn-primary login-submit">
+            <span id="submit-label">Sign in</span>
+          </button>
+        </form>
+
+        <div class="login-divider">or</div>
+
+        <div class="sso-row">
+          <button class="sso-btn" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+            Google
+          </button>
+          <button class="sso-btn" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24"><path fill="#00A4EF" d="M11.4 11.4H1V1h10.4z"/><path fill="#FFB900" d="M23 11.4H12.6V1H23z"/><path fill="#7FBA00" d="M11.4 23H1V12.6h10.4z"/><path fill="#F25022" d="M23 23H12.6V12.6H23z"/></svg>
+            Microsoft
+          </button>
+        </div>
+
+        <div class="login-foot">
+          Admin or dispatcher? <a href="/admin-login.html">Sign in to Admin →</a>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="/src/login.js"></script>
+</body>
+</html>

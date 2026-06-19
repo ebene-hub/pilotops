@@ -1,0 +1,322 @@
+import React from "react";
+import { supabase } from "./api/supabase.js";
+// Pilot Ops — App shell: sidebar nav, topbar, tweaks, routing
+const { useState: appUseState, useEffect: appUseEffect, useMemo: appUseMemo } = React;
+
+const NAV = [
+  { group: "Operations", items: [
+    { id: "flight-hub", label: "Flight Hub", icon: "drone", badge: "4" },
+    { id: "notify", label: "Start mission", icon: "play" },
+    { id: "live", label: "Live stream", icon: "video", badge: "LIVE", live: true },
+    { id: "multi", label: "Multi-screen ops", icon: "grid", badge: "4" },
+    { id: "summary", label: "Post-flight summary", icon: "mail" },
+  ]},
+  { group: "Fleet", items: [
+    { id: "fleet", label: "Aircraft and Batteries", icon: "drone", badge: "6" },
+  ]},
+  { group: "Storage", items: [
+    { id: "gallery", label: "Media gallery", icon: "image", badge: "2.1k" },
+  ]},
+  { group: "Logging", items: [
+    { id: "logbook", label: "Pilot logbook", icon: "reports" },
+    { id: "incidents", label: "Log incident", icon: "warn" },
+    { id: "reports", label: "Flight log archive", icon: "reports", badge: "14" },
+  ]},
+];
+
+const TITLES = {
+  "flight-hub": ["Operations", "Flight Hub"],
+  "notify": ["Operations", "Start mission"],
+  "live": ["Operations", "Live stream"],
+  "multi": ["Operations", "Multi-screen ops"],
+  "summary": ["Operations", "Post-flight summary"],
+  "fleet": ["Fleet", "Aircraft and Batteries"],
+  "gallery": ["Storage", "Media gallery"],
+  "logbook": ["Logging", "Pilot logbook"],
+  "incidents": ["Logging", "Incident report"],
+  "reports": ["Logging", "Flight log archive"],
+};
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "theme": "light",
+  "accent": "#2563eb",
+  "basemap": "carto",
+  "density": "regular",
+  "sector": "generic",
+  "sidebarPos": "left",
+  "sidebarCollapsed": false,
+  "showLiveBadge": true,
+  "showAiAvatar": true
+}/*EDITMODE-END*/;
+
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [view, setView] = appUseState("flight-hub");
+  const [activeFlight, setActiveFlight] = appUseState(ACTIVE_FLIGHTS[0]);
+  const [mobileNavOpen, setMobileNavOpen] = appUseState(false);
+  const [paletteOpen, setPaletteOpen] = appUseState(false);
+
+  // Close mobile nav when route changes
+  appUseEffect(() => { setMobileNavOpen(false); }, [view]);
+
+  // Track narrow viewport for responsive UI affordances
+  const [isNarrow, setIsNarrow] = appUseState(typeof window !== "undefined" && window.innerWidth < 900);
+  appUseEffect(() => {
+    const onResize = () => setIsNarrow(window.innerWidth < 900);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Cmd-K / Ctrl-K global hotkey
+  appUseEffect(() => {
+    function onKey(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen(p => !p);
+      } else if (e.key === "/" && !/INPUT|TEXTAREA/.test(e.target?.tagName) && !e.target?.isContentEditable) {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  // Admin-managed state shared with the pilot's mission-start form
+  const [teamRoster, setTeamRoster] = appUseState(TEAM_ROSTER);
+  const [fieldConfig, setFieldConfig] = appUseState(DEFAULT_FIELD_CONFIG);
+
+  // Apply theme / density / accent / sector / sidebar on the shell
+  appUseEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = t.theme === "dark" ? "dark" : t.theme === "hc" ? "hc" : "";
+    root.dataset.density = t.density;
+    root.style.setProperty("--accent", t.accent);
+    // Recompute hover from accent
+    root.style.setProperty("--accent-hover", t.accent);
+    root.style.setProperty("--accent-soft", `color-mix(in oklab, ${t.accent} 10%, transparent)`);
+    root.style.setProperty("--accent-ring", `color-mix(in oklab, ${t.accent} 22%, transparent)`);
+  }, [t.theme, t.density, t.accent]);
+
+  const breadcrumbs = TITLES[view] || ["", ""];
+
+  const setBasemap = (b) => setTweak("basemap", b);
+
+  return (
+    <div className="app-shell" data-sidebar-pos={t.sidebarPos} data-sidebar-collapsed={t.sidebarCollapsed} data-mobile-nav={mobileNavOpen ? "open" : "closed"}>
+      {mobileNavOpen && <div className="mobile-nav-scrim" onClick={() => setMobileNavOpen(false)}/>}
+      <Sidebar nav={NAV} view={view} setView={setView} collapsed={t.sidebarCollapsed && !isNarrow} onToggle={() => setTweak("sidebarCollapsed", !t.sidebarCollapsed)} onMobileClose={() => setMobileNavOpen(false)}/>
+      <div className="main-col">
+        <Topbar crumbs={breadcrumbs} view={view} sector={t.sector} setSector={v => setTweak("sector", v)} onMobileMenu={() => setMobileNavOpen(true)} onOpenPalette={() => setPaletteOpen(true)}/>
+        <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+          <ViewRenderer view={view} basemap={t.basemap} setBasemap={setBasemap} activeFlight={activeFlight}
+            onStartFlight={() => setView("notify")}
+            onOpenStream={(f) => { setActiveFlight(f); setView("live"); }}
+            onEndFlight={() => setView("summary")}
+            onEmergencyLaunched={(entry) => {
+              // emergency-launch builds the real flight (with dbId) for us.
+              const flight = entry.flightObj || {
+                id: entry.id, area: entry.area, pilot: PILOTS[0] || null,
+                uav: (typeof AIRCRAFT !== "undefined" ? AIRCRAFT.find(a => a.id === entry.aircraft) : null) || null,
+                status: "live", emergency: true, emergencyType: entry.type,
+                typeLabel: entry.typeLabel, justification: entry.justification,
+              };
+              setActiveFlight(flight);
+              setView("live");
+            }}
+            onFocus={(f) => { setActiveFlight(f); setView("live"); }}
+            accent={t.accent}
+            teamRoster={teamRoster} setTeamRoster={setTeamRoster}
+            fieldConfig={fieldConfig} setFieldConfig={setFieldConfig}
+          />
+        </div>
+      </div>
+      <PilotOpsTweaks t={t} setTweak={setTweak}/>
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={(r) => setView(r)}/>
+    </div>
+  );
+}
+
+function Sidebar({ nav, view, setView, collapsed, onToggle, onMobileClose }) {
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-brand">
+        <div className="brand-mark">PO</div>
+        {!collapsed && (
+          <div className="brand-text">
+            Pilot Ops
+            <span className="brand-sub">Logging & operations</span>
+          </div>
+        )}
+        <button className="iconbtn mobile-only" style={{ marginLeft: "auto", width: 28, height: 28 }} onClick={onMobileClose} title="Close nav">
+          <Icon name="close" size={14}/>
+        </button>
+        <button className="iconbtn desktop-only" style={{ marginLeft: "auto", width: 28, height: 28 }} onClick={onToggle} title="Collapse sidebar">
+          <Icon name="sidebar" size={14}/>
+        </button>
+      </div>
+      <nav className="sidebar-nav">
+        {nav.map(g => (
+          <div key={g.group}>
+            {!collapsed && <div className="nav-group-label">{g.group}</div>}
+            {g.items.map(it => (
+              <button key={it.id}
+                className={"nav-item " + (view === it.id ? "active" : "")}
+                onClick={() => setView(it.id)}
+                title={it.label}>
+                <Icon name={it.icon} size={16}/>
+                <span>{it.label}</span>
+                {it.badge && (
+                  <span className={"badge " + (it.live ? "badge-live" : "")} style={{ marginLeft: "auto", fontSize: 9.5, padding: "1px 6px" }}>
+                    {it.live && <span className="dot"/>}
+                    {it.badge}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        ))}
+      </nav>
+      <div className="sidebar-foot">
+        {!collapsed && (
+          <a href="/admin.html" style={{
+            display: "flex", alignItems: "center", gap: 10,
+            padding: "9px 12px", borderRadius: 8, marginBottom: 10,
+            background: "var(--bg-subtle)", color: "var(--text-2)",
+            textDecoration: "none", fontSize: 12.5, fontWeight: 500,
+            border: "1px solid var(--border)"
+          }} title="Open Admin console">
+            <Icon name="settings" size={14}/>
+            <span style={{ flex: 1 }}>Admin console</span>
+            <Icon name="arrowRight" size={11} style={{ opacity: 0.6 }}/>
+          </a>
+        )}
+        <div className="user-card" title={`Signed in as ${(window.__poUser?.name) || "Dispatcher Kade"}`}>
+          <div className="user-avatar" style={{ background: window.__poUser ? `linear-gradient(135deg, ${(PILOTS.find(p => p.id === window.__poUser.pilotId)?.color) || "#2563eb"}, color-mix(in oklab, ${(PILOTS.find(p => p.id === window.__poUser.pilotId)?.color) || "#2563eb"} 70%, #000))` : "linear-gradient(135deg, #2563eb, #1d4ed8)" }}>
+            {window.__poUser?.initials || "DK"}
+          </div>
+          {!collapsed && (
+            <div className="user-meta">
+              <div className="user-name">{window.__poUser?.name || "Dispatcher Kade"}</div>
+              <div className="user-role">{window.__poUser ? "Pilot · signed in" : "Operations Director"}</div>
+            </div>
+          )}
+          {!collapsed && (
+            <button
+              className="iconbtn"
+              style={{ width: 28, height: 28, marginLeft: "auto" }}
+              title="Sign out"
+              onClick={async (e) => {
+                e.stopPropagation();
+                if (confirm("Sign out of Pilot Ops?")) {
+                  try { await supabase.auth.signOut(); } catch {}
+                  window.location.href = "/login.html";
+                }
+              }}>
+              <Icon name="logout" size={13}/>
+            </button>
+          )}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function ThemeToggle() {
+  const [theme, setTheme] = React.useState(() => document.documentElement.getAttribute("data-theme") || "light");
+  function flip() {
+    const next = theme === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("po:theme", next); } catch {}
+    setTheme(next);
+  }
+  return (
+    <button className="iconbtn theme-toggle hide-narrow" onClick={flip}
+      title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}>
+      <span className="ic-sun"><Icon name="sun" size={16}/></span>
+      <span className="ic-moon"><Icon name="moon" size={16}/></span>
+    </button>
+  );
+}
+
+function Topbar({ crumbs, view, sector, setSector, onMobileMenu, onOpenPalette }) {
+  return (
+    <header className="topbar">
+      <button className="iconbtn mobile-only" onClick={onMobileMenu} title="Menu">
+        <Icon name="menu" size={18}/>
+      </button>
+      <div className="topbar-crumbs">
+        <span className="hide-narrow">{crumbs[0]}</span>
+        <Icon name="chev" size={12} className="sep hide-narrow"/>
+        <span style={{ color: "var(--text)", fontWeight: 600 }}>{crumbs[1]}</span>
+      </div>
+      <div className="topbar-spacer"/>
+      <button className="search-input hide-narrow" onClick={onOpenPalette}
+        style={{ cursor: "pointer", border: "1px solid var(--border)", background: "var(--bg-subtle)" }}
+        title="Search (⌘K)">
+        <Icon name="search" size={14}/>
+        <span>Search flights, incidents, pilots…</span>
+        <kbd>⌘K</kbd>
+      </button>
+      <button className="iconbtn mobile-only" onClick={onOpenPalette} title="Search (⌘K)">
+        <Icon name="search" size={16}/>
+      </button>
+      <select className="select hide-narrow" value={sector} onChange={e => setSector(e.target.value)} style={{ width: 180, height: 34, fontSize: 12.5 }}>
+        {Object.entries(SECTORS).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
+      </select>
+      <button className="iconbtn" title="Notifications">
+        <Icon name="bell" size={16}/>
+        <span className="dot"/>
+      </button>
+      <ThemeToggle/>
+      <button className="iconbtn hide-narrow" title="Settings"><Icon name="settings" size={16}/></button>
+      <div className="vdivider hide-narrow" style={{ height: 22 }}/>
+      <div className="user-avatar" style={{ background: "linear-gradient(135deg, #2563eb, #1d4ed8)" }}>DK</div>
+    </header>
+  );
+}
+
+function ViewRenderer({ view, basemap, setBasemap, activeFlight, onStartFlight, onOpenStream, onEndFlight, onFocus, accent, teamRoster, setTeamRoster, fieldConfig, setFieldConfig, onEmergencyLaunched }) {
+  switch (view) {
+    case "flight-hub": return <FlightHubView basemap={basemap} setBasemap={setBasemap} onStartFlight={onStartFlight} onOpenStream={onOpenStream} onEmergencyLaunched={onEmergencyLaunched}/>;
+    case "notify":     return <NotifyComposerView teamRoster={teamRoster} fieldConfig={fieldConfig} onOpenStream={onOpenStream}/>;
+    case "live":       return <LiveStreamView flight={activeFlight} basemap={basemap} setBasemap={setBasemap} onEndFlight={onEndFlight}/>;
+    case "multi":      return <MultiScreenView basemap={basemap} onFocus={onFocus}/>;
+    case "summary":    return <SummaryEmailView flight={activeFlight}/>;
+    case "fleet":      return <FleetView/>;
+    case "gallery":    return <MediaGalleryView accent={accent}/>;
+    case "logbook":    return <LogbookView accent={accent}/>;
+    case "incidents":  return <IncidentReportView basemap={basemap} setBasemap={setBasemap}/>;
+    case "reports":    return <ReportsArchiveView/>;
+    default:           return null;
+  }
+}
+
+function PilotOpsTweaks({ t, setTweak }) {
+  return (
+    <TweaksPanel>
+      <TweakSection label="Theme"/>
+      <TweakRadio label="Mode" value={t.theme} options={["light", "dark", "hc"]} onChange={v => setTweak("theme", v)}/>
+      <TweakColor label="Accent" value={t.accent}
+        options={["#2563eb", "#7c3aed", "#0891b2", "#059669", "#d97706", "#db2777"]}
+        onChange={v => setTweak("accent", v)}/>
+      <TweakRadio label="Density" value={t.density} options={["compact", "regular", "comfy"]} onChange={v => setTweak("density", v)}/>
+
+      <TweakSection label="Map"/>
+      <TweakSelect label="Basemap" value={t.basemap} options={["streets", "satellite", "topographic", "dark", "carto"]} onChange={v => setTweak("basemap", v)}/>
+
+      <TweakSection label="Sector preset"/>
+      <TweakSelect label="Sector" value={t.sector}
+        options={Object.entries(SECTORS).map(([k, s]) => ({ value: k, label: s.label }))}
+        onChange={v => setTweak("sector", v)}/>
+
+      <TweakSection label="Layout"/>
+      <TweakRadio label="Sidebar" value={t.sidebarPos} options={["left", "right"]} onChange={v => setTweak("sidebarPos", v)}/>
+      <TweakToggle label="Collapse sidebar" value={t.sidebarCollapsed} onChange={v => setTweak("sidebarCollapsed", v)}/>
+      <TweakToggle label="Show LIVE badge in nav" value={t.showLiveBadge} onChange={v => setTweak("showLiveBadge", v)}/>
+    </TweaksPanel>
+  );
+}
+
+// Expose the shell so the entry module (main.jsx) can mount it after all
+// view modules have registered their components on `window`.
+Object.assign(window, { App });

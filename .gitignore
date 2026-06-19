@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+.vite/
+.env
+!.env.example
+supabase/volumes/
+supabase/.temp/
+supabase/.branches/
+seed-pilot.mjs
