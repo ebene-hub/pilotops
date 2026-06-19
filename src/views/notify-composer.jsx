@@ -33,10 +33,12 @@ function NotifyComposerView({ teamRoster, fieldConfig, onOpenStream }) {
     return r;
   }, [teamRoster]);
 
-  // Default team rows: Pilot (required), Co-pilot, GIS Analyst (optional)
+  // Pilot in command is ALWAYS the signed-in user (fixed). They pick a co-pilot
+  // (any registered Pilot or Co-pilot) and optionally other crew.
+  const myId = window.__poUser?.id || "";
   const [team, setTeam] = ncUseState([
-    { role: "Pilot",       memberId: byRole["Pilot"]?.[0]?.id || "",       required: true },
-    { role: "Co-pilot",    memberId: byRole["Co-pilot"]?.[0]?.id || "",    required: false },
+    { role: "Pilot",       memberId: myId, required: true, locked: true },
+    { role: "Co-pilot",    memberId: "",   required: false },
     { role: "GIS Analyst", memberId: byRole["GIS Analyst"]?.[0]?.id || "", required: false },
   ]);
 
@@ -195,11 +197,14 @@ function NotifyComposerView({ teamRoster, fieldConfig, onOpenStream }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: "var(--density-gap)" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--density-gap)" }}>
           {/* Team section */}
-          <FormCard n="1" title="Mission team" subtitle="Select team members from the roster">
+          <FormCard n="1" title="Mission team" subtitle="You are the pilot in command. Add a co-pilot (a registered pilot or co-pilot) and any crew.">
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {team.map((row, idx) => {
-                const candidates = byRole[row.role] || [];
-                const selected = teamRoster.find(m => m.id === row.memberId);
+                // Co-pilot can be any registered Pilot or Co-pilot (excluding the PIC).
+                const candidates = row.role === "Co-pilot"
+                  ? [...(byRole["Pilot"] || []), ...(byRole["Co-pilot"] || [])].filter((m, i, arr) => m.id !== myId && arr.findIndex(x => x.id === m.id) === i)
+                  : (byRole[row.role] || []);
+                const selected = teamRoster.find(m => m.id === row.memberId) || (row.locked ? { name: window.__poUser?.name, initials: window.__poUser?.initials, color: "#2563eb" } : null);
                 return (
                   <div key={idx} style={{ display: "grid", gridTemplateColumns: "160px 1fr 32px", gap: 10, alignItems: "center", padding: "10px 12px", background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -209,14 +214,21 @@ function NotifyComposerView({ teamRoster, fieldConfig, onOpenStream }) {
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {selected && (
-                        <div className="user-avatar" style={{ width: 28, height: 28, fontSize: 11, background: `linear-gradient(135deg, ${selected.color}, color-mix(in oklab, ${selected.color} 70%, #000))` }}>{selected.initials}</div>
+                        <div className="user-avatar" style={{ width: 28, height: 28, fontSize: 11, background: `linear-gradient(135deg, ${selected.color || "#2563eb"}, color-mix(in oklab, ${selected.color || "#2563eb"} 70%, #000))` }}>{selected.initials || "—"}</div>
                       )}
-                      <select className="select" value={row.memberId} onChange={e => updateTeamRow(idx, { memberId: e.target.value })} style={{ flex: 1 }}>
-                        <option value="">— Select {row.role.toLowerCase()} —</option>
-                        {candidates.map(m => <option key={m.id} value={m.id}>{m.name}{m.license ? " · " + m.license : ""}</option>)}
-                      </select>
+                      {row.locked ? (
+                        <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected?.name || "You"}</span>
+                          <span className="pill" style={{ background: "var(--bg-muted)", color: "var(--text-3)", fontSize: 9.5 }}>You · pilot in command</span>
+                        </div>
+                      ) : (
+                        <select className="select" value={row.memberId} onChange={e => updateTeamRow(idx, { memberId: e.target.value })} style={{ flex: 1 }}>
+                          <option value="">— Select {row.role.toLowerCase()} —</option>
+                          {candidates.map(m => <option key={m.id} value={m.id}>{m.name}{m.shortId ? " · " + m.shortId : ""}</option>)}
+                        </select>
+                      )}
                     </div>
-                    {!row.required ? (
+                    {(!row.required && !row.locked) ? (
                       <button className="iconbtn" onClick={() => removeTeamRow(idx)} title="Remove"><Icon name="x" size={14}/></button>
                     ) : <div/>}
                   </div>
