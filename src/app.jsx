@@ -117,7 +117,7 @@ function App() {
       {mobileNavOpen && <div className="mobile-nav-scrim" onClick={() => setMobileNavOpen(false)}/>}
       <Sidebar nav={navWithBadges()} view={view} setView={setView} collapsed={t.sidebarCollapsed && !isNarrow} onToggle={() => setTweak("sidebarCollapsed", !t.sidebarCollapsed)} onMobileClose={() => setMobileNavOpen(false)}/>
       <div className="main-col">
-        <Topbar crumbs={breadcrumbs} view={view} sector={t.sector} setSector={v => setTweak("sector", v)} onMobileMenu={() => setMobileNavOpen(true)} onOpenPalette={() => setPaletteOpen(true)}/>
+        <Topbar crumbs={breadcrumbs} view={view} sector={t.sector} setSector={v => setTweak("sector", v)} onMobileMenu={() => setMobileNavOpen(true)} onOpenPalette={() => setPaletteOpen(true)} t={t} setTweak={setTweak}/>
         <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
           <ViewRenderer view={view} basemap={t.basemap} setBasemap={setBasemap} activeFlight={activeFlight}
             onStartFlight={() => setView("notify")}
@@ -249,7 +249,92 @@ function ThemeToggle() {
   );
 }
 
-function Topbar({ crumbs, view, sector, setSector, onMobileMenu, onOpenPalette }) {
+function useClickOutside(onClose) {
+  const ref = appUseState(() => ({ current: null }))[0];
+  appUseEffect(() => {
+    function onDoc(e) { if (ref.current && !ref.current.contains(e.target)) onClose(); }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+  return ref;
+}
+const POPOVER = { position: "absolute", top: "calc(100% + 8px)", right: 0, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 10px 30px rgba(13,18,30,0.22)", zIndex: 1000, overflow: "hidden" };
+
+function NotificationsBell() {
+  const [open, setOpen] = appUseState(false);
+  const [items, setItems] = appUseState([]);
+  const ref = useClickOutside(() => setOpen(false));
+  async function toggle() {
+    const next = !open; setOpen(next);
+    if (next) {
+      const { data } = await supabase.from("notifications").select("type,payload,created_at").order("created_at", { ascending: false }).limit(15);
+      setItems(data || []);
+    }
+  }
+  const label = (n) => { const p = n.payload || {};
+    if (n.type === "mission_start") return `Mission started · ${p.flight || ""}`;
+    if (n.type === "emergency") return `Emergency launch · ${p.flight || ""}`;
+    if (n.type === "incident") return `Incident logged${p.severity ? " · " + p.severity : ""}`;
+    if (n.type === "summary") return `Post-flight summary sent · ${p.flight || ""}`;
+    return n.type; };
+  const rt = (ts) => { const d = Date.now() - new Date(ts).getTime(); if (d < 60000) return "just now"; if (d < 3600000) return Math.floor(d / 60000) + "m ago"; if (d < 86400000) return Math.floor(d / 3600000) + "h ago"; return Math.floor(d / 86400000) + "d ago"; };
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button className="iconbtn" title="Notifications" onClick={toggle}><Icon name="bell" size={16}/><span className="dot"/></button>
+      {open && (
+        <div style={{ ...POPOVER, width: 320 }}>
+          <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", fontWeight: 600, fontSize: 13 }}>Notifications</div>
+          <div style={{ maxHeight: 360, overflowY: "auto" }}>
+            {items.length === 0 ? <div className="muted" style={{ padding: 20, textAlign: "center", fontSize: 12.5 }}>No notifications yet.</div>
+              : items.map((n, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 7, background: n.type === "emergency" ? "color-mix(in oklab, var(--danger) 12%, transparent)" : "var(--accent-soft)", color: n.type === "emergency" ? "var(--danger)" : "var(--accent)", display: "grid", placeItems: "center", flexShrink: 0 }}><Icon name={n.type === "emergency" || n.type === "incident" ? "warn" : n.type === "summary" ? "mail" : "drone"} size={13}/></div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5 }}>{label(n)}</div>
+                    <div className="muted mono" style={{ fontSize: 10.5, marginTop: 2 }}>{rt(n.created_at)}</div>
+                  </div>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SettingsMenu({ t, setTweak }) {
+  const [open, setOpen] = appUseState(false);
+  const ref = useClickOutside(() => setOpen(false));
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button className="iconbtn hide-narrow" title="Settings" onClick={() => setOpen(o => !o)}><Icon name="settings" size={16}/></button>
+      {open && (
+        <div style={{ ...POPOVER, width: 240, padding: 8 }}>
+          <div style={{ padding: "4px 8px", fontSize: 11, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Appearance</div>
+          <div style={{ padding: "6px 8px" }}>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>Theme</div>
+            <div className="row" style={{ gap: 4 }}>
+              {["light", "dark", "hc"].map(m => <button key={m} className={"btn btn-sm " + (t.theme === m ? "btn-primary" : "btn-ghost")} onClick={() => setTweak("theme", m)} style={{ flex: 1, textTransform: "capitalize" }}>{m === "hc" ? "Contrast" : m}</button>)}
+            </div>
+          </div>
+          <div style={{ padding: "6px 8px" }}>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>Density</div>
+            <div className="row" style={{ gap: 4 }}>
+              {["compact", "regular", "comfy"].map(d => <button key={d} className={"btn btn-sm " + (t.density === d ? "btn-primary" : "btn-ghost")} onClick={() => setTweak("density", d)} style={{ flex: 1, textTransform: "capitalize" }}>{d}</button>)}
+            </div>
+          </div>
+          <div style={{ borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 6 }}>
+            <button className="btn btn-ghost" style={{ width: "100%", justifyContent: "flex-start" }} onClick={async () => { if (confirm("Sign out of Pilot Ops?")) { try { await supabase.auth.signOut(); } catch {} window.location.href = "/login.html"; } }}>
+              <Icon name="logout" size={13}/> Sign out
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Topbar({ crumbs, view, sector, setSector, onMobileMenu, onOpenPalette, t, setTweak }) {
   return (
     <header className="topbar">
       <button className="iconbtn mobile-only" onClick={onMobileMenu} title="Menu">
@@ -274,12 +359,9 @@ function Topbar({ crumbs, view, sector, setSector, onMobileMenu, onOpenPalette }
       <select className="select hide-narrow" value={sector} onChange={e => setSector(e.target.value)} style={{ width: 180, height: 34, fontSize: 12.5 }}>
         {Object.entries(SECTORS).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
       </select>
-      <button className="iconbtn" title="Notifications">
-        <Icon name="bell" size={16}/>
-        <span className="dot"/>
-      </button>
+      <NotificationsBell/>
       <ThemeToggle/>
-      <button className="iconbtn hide-narrow" title="Settings"><Icon name="settings" size={16}/></button>
+      <SettingsMenu t={t} setTweak={setTweak}/>
       <div className="vdivider hide-narrow" style={{ height: 22 }}/>
       <div className="user-avatar" style={{ background: "linear-gradient(135deg, #2563eb, #1d4ed8)" }}>DK</div>
     </header>
