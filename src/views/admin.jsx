@@ -231,11 +231,15 @@ function AdminView({ teamRoster, setTeamRoster, fieldConfig, setFieldConfig }) {
 }
 
 /* ---------- Team roster tab ---------- */
+// Operating crew (Pilot/Co-pilot) — only they carry license details.
+const isCrewMember = (m) => /pilot/i.test(m.role || "") || (m.roles || []).some(r => /pilot/i.test(r));
+
 function TeamRosterTab({ teamRoster, setTeamRoster }) {
   const [editingId, setEditingId] = adUseState(null);
   const [search, setSearch] = adUseState("");
   const [roleFilter, setRoleFilter] = adUseState("All");
   const [revealCode, setRevealCode] = adUseState(null);
+  const [viewing, setViewing] = adUseState(null);
   const toast = useToast ? useToast() : (() => {});
 
   const update = (id, patch) => setTeamRoster(teamRoster.map(m => m.id === id ? { ...m, ...patch, initials: patch.name ? patch.name.split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase() : m.initials } : m));
@@ -326,7 +330,7 @@ function TeamRosterTab({ teamRoster, setTeamRoster }) {
                         <div className="user-avatar" style={{ width: 30, height: 30, fontSize: 11, background: `linear-gradient(135deg, ${m.color}, color-mix(in oklab, ${m.color} 70%, #000))` }}>{m.initials}</div>
                         {isEdit
                           ? <input className="input" value={m.name} onChange={e => update(m.id, { name: e.target.value })} style={{ width: 200, height: 30 }}/>
-                          : <span style={{ fontWeight: 600, fontSize: 13 }}>{m.name}</span>
+                          : <button onClick={() => setViewing(m)} title="View member details" style={{ fontWeight: 600, fontSize: 13, background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--accent)" }}>{m.name}</button>
                         }
                       </div>
                     </td>
@@ -340,9 +344,11 @@ function TeamRosterTab({ teamRoster, setTeamRoster }) {
                       }
                     </td>
                     <td className="mono" style={{ fontSize: 12 }}>
-                      {isEdit
-                        ? <input className="input mono" value={m.license || ""} placeholder="—" onChange={e => update(m.id, { license: e.target.value })} style={{ width: 140, height: 30, fontSize: 11.5 }}/>
-                        : (m.license || <span className="muted">—</span>)
+                      {!isCrewMember(m)
+                        ? <span className="muted" style={{ fontSize: 11 }}>n/a</span>
+                        : isEdit
+                          ? <input className="input mono" value={m.license || ""} placeholder="—" onChange={e => update(m.id, { license: e.target.value })} style={{ width: 140, height: 30, fontSize: 11.5 }}/>
+                          : (m.license || <span className="muted">—</span>)
                       }
                     </td>
                     <td>
@@ -385,7 +391,60 @@ function TeamRosterTab({ teamRoster, setTeamRoster }) {
           {filtered.length === 0 && <div className="muted" style={{ padding: 40, textAlign: "center" }}>No members match.</div>}
         </div>
       </div>
+
+      {viewing && <MemberDetailModal member={viewing} onClose={() => setViewing(null)}
+        onEdit={() => { setEditingId(viewing.id); setViewing(null); }}/>}
     </>
+  );
+}
+
+/* ---------- Member detail modal ---------- */
+function MemberDetailModal({ member: m, onClose, onEdit }) {
+  const crew = isCrewMember(m);
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString() : "—";
+  const kyc = m.kycStatus || "verified";
+  const kycBadge = kyc === "verified" ? "badge-success" : kyc === "rejected" ? "badge-danger" : "badge-warning";
+  const expSoon = m.licenseExpiry && (new Date(m.licenseExpiry) - Date.now()) < 30 * 86400000;
+  const Row = ({ k, v }) => (<>
+    <div className="muted" style={{ fontSize: 12 }}>{k}</div>
+    <div style={{ fontWeight: 500, wordBreak: "break-word" }}>{v || <span className="muted">—</span>}</div>
+  </>);
+  return (
+    <Modal open onClose={onClose} icon="users" size="md"
+      title={m.name}
+      subtitle={crew ? "Operating crew" : "Team member"}
+      footer={<>
+        <button className="btn" onClick={onClose}>Close</button>
+        <button className="btn btn-primary" onClick={onEdit}><Icon name="settings" size={13}/> Edit member</button>
+      </>}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+        <div className="user-avatar" style={{ width: 44, height: 44, fontSize: 15, background: `linear-gradient(135deg, ${m.color}, color-mix(in oklab, ${m.color} 70%, #000))` }}>{m.initials}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="row" style={{ gap: 4, flexWrap: "wrap" }}>
+            {(m.roles && m.roles.length ? m.roles : [m.role]).map(r => <span key={r} className="pill">{r}</span>)}
+          </div>
+          <div className="mono muted" style={{ fontSize: 11, marginTop: 4 }}>{m.shortId || m.id}</div>
+        </div>
+        <span className={"badge " + kycBadge}><span className="dot"/>KYC {kyc}</span>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", rowGap: 10, columnGap: 12, fontSize: 13 }}>
+        <Row k="Email" v={m.email}/>
+        <Row k="Phone" v={m.phone}/>
+        <Row k="Job title" v={m.jobTitle}/>
+        <Row k="Status" v={m.status}/>
+        <Row k="Flight hours" v={m.hours != null ? `${m.hours} h` : "—"}/>
+        {crew && <>
+          <div style={{ gridColumn: "1 / -1", borderTop: "1px solid var(--border)", margin: "4px 0" }}/>
+          <Row k="Date of birth" v={fmtDate(m.dob)}/>
+          <Row k="Government ID" v={m.govId}/>
+          <Row k="License number" v={m.license}/>
+          <Row k="License class" v={m.licenseClass}/>
+          <Row k="License expiry" v={<span>{fmtDate(m.licenseExpiry)}{expSoon ? <span style={{ color: "var(--warning)", marginLeft: 6 }}>⚠ expiring soon</span> : ""}</span>}/>
+          <Row k="Pilot code" v={m.hasCode ? "Set ••••••" : "Not set"}/>
+        </>}
+      </div>
+    </Modal>
   );
 }
 

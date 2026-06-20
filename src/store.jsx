@@ -184,7 +184,7 @@ export async function bootstrap() {
       return { id: c.id, label: c.type, expires: c.expires_at || "—", days, kind: c.type,
         status: c.status || (days <= 0 ? "expired" : days < 30 ? "warn" : "valid"), note: "" };
     }),
-    TEAM_ROSTER: profiles.map((p) => ({ id: p.id, shortId: p.shortId, name: p.name, role: p.role, roles: p.roles, initials: p.initials, color: p.color, license: p.license, email: p.email, hasCode: p.hasCode })),
+    TEAM_ROSTER: profiles.map((p) => ({ id: p.id, shortId: p.shortId, name: p.name, role: p.role, roles: p.roles, initials: p.initials, color: p.color, license: p.license, email: p.email, hasCode: p.hasCode, status: p.status, hours: p.hours, kycStatus: p.kycStatus, phone: p.phone, dob: p.dob, govId: p.govId, licenseClass: p.licenseClass, licenseExpiry: p.licenseExpiry, jobTitle: p.jobTitle })),
     TEAM_ROLES: rolesRaw.map((r) => r.name),
     ALL_ROLES: rolesRaw.map((r) => ({ id: r.id, name: r.name, description: r.description, permissions: r.permissions || [] })),
     COVERAGE_AREA_LIBRARY: coverageRaw.map((c) => c.name),

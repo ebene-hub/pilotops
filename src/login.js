@@ -73,7 +73,7 @@ async function initInvite() {
   show($("name-field"), true);
   // KYC: everyone provides phone + job title; operating crew also provide
   // license + DOB/gov-ID. Crew is determined by the invited roles.
-  const isCrew = (inv.roles || []).some((r) => /pilot|field/i.test(r));
+  const isCrew = (inv.roles || []).some((r) => /pilot/i.test(r));
   $("kyc-fields").style.display = "block";
   $("kyc-crew").style.display = isCrew ? "block" : "none";
   const email = $("email"); email.value = inv.email; email.readOnly = true; email.style.color = "var(--text-3)";
@@ -127,7 +127,7 @@ async function handleRegister() {
   if (!name) return fail("Enter your full name.");
   if (pwd.length < 8 || !/\d/.test(pwd)) return fail("Password must be at least 8 characters with one number.");
 
-  const isCrew = (activeInvite.roles || []).some((r) => /pilot|field/i.test(r));
+  const isCrew = (activeInvite.roles || []).some((r) => /pilot/i.test(r));
   const kyc = {
     phone: $("kyc-phone").value.trim(),
     job_title: $("kyc-title").value.trim(),

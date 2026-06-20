@@ -390,7 +390,7 @@ function fmtRemaining(ms) {
 /* ---------- Invite modal ---------- */
 function InviteModal({ onClose, onSend, existingEmails }) {
   const [emailsRaw, setEmailsRaw] = mvUseState("");
-  const [roles, setRoles] = mvUseState(new Set(["Field"]));
+  const [roles, setRoles] = mvUseState(new Set());
   const [message, setMessage] = mvUseState("");
   const [expiry, setExpiry] = mvUseState(7);
   const [touched, setTouched] = mvUseState(false);
@@ -486,7 +486,7 @@ function InviteModal({ onClose, onSend, existingEmails }) {
 
 /* ---------- KYC review modal ---------- */
 function KycReviewModal({ member, onClose, onVerify, onReject }) {
-  const isCrew = (member.roles || []).some(r => /pilot|field/i.test(r));
+  const isCrew = (member.roles || []).some(r => /pilot/i.test(r));
   const fmtDate = (d) => d ? new Date(d).toLocaleDateString() : "—";
   const expSoon = member.licenseExpiry && (new Date(member.licenseExpiry) - Date.now()) < 30 * 86400000;
   const rows = [
