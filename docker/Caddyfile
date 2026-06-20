@@ -12,6 +12,16 @@
 		reverse_proxy kong:8000
 	}
 
+	# Live video — WebRTC (WHEP) signalling, and HLS fallback. The prefix is
+	# stripped so MediaMTX sees /<flightId>/whep and /<flightId>/index.m3u8.
+	# (WebRTC media itself flows over UDP 8189 direct to the mediamtx container.)
+	handle_path /stream/* {
+		reverse_proxy mediamtx:8889
+	}
+	handle_path /hls/* {
+		reverse_proxy mediamtx:8888
+	}
+
 	handle {
 		reverse_proxy web:80
 	}

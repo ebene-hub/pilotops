@@ -38,6 +38,42 @@ services:
       - default
       - supabase
 
+  # Live video: ingest the controller cast (RTMP/SRT) and redistribute it to the
+  # Pilot Ops browser as low-latency WebRTC (WHEP) + HLS, recording each session.
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    restart: unless-stopped
+    depends_on:
+      - stream-gateway
+    environment:
+      # Advertise the public host in WebRTC ICE candidates so browsers can reach
+      # the UDP media port. For local testing this is "localhost".
+      MTX_WEBRTCADDITIONALHOSTS: ${DOMAIN:-localhost}
+    volumes:
+      - ./docker/mediamtx.yml:/mediamtx.yml:ro
+      - mediamtx_recordings:/recordings
+    ports:
+      - "1935:1935"        # RTMP ingest (TCP)
+      - "8890:8890/udp"    # SRT ingest (UDP)
+      - "8189:8189/udp"    # WebRTC ICE media (UDP) — must be open on the public IP
+    networks:
+      - default
+
+  # Validates stream auth against Supabase and attaches recordings to flights.
+  stream-gateway:
+    build:
+      context: ./services/stream-gateway
+    restart: unless-stopped
+    environment:
+      # Reach Supabase over the internal API gateway on the shared network.
+      SUPABASE_URL: ${STREAM_SUPABASE_URL:-http://kong:8000}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+    volumes:
+      - mediamtx_recordings:/recordings:ro
+    networks:
+      - default
+      - supabase
+
 networks:
   # The external network created by the official Supabase compose. Find it with
   # `docker network ls` (e.g. "supabase_default") and set SUPABASE_NETWORK.
@@ -48,3 +84,4 @@ networks:
 volumes:
   caddy_data:
   caddy_config:
+  mediamtx_recordings:

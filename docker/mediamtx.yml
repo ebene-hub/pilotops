@@ -1,0 +1,68 @@
+# MediaMTX — ingest the controller cast (RTMP/SRT) and redistribute it to the
+# Pilot Ops browser as low-latency WebRTC (WHEP), with HLS fallback + recording.
+#
+# The stream path is the flight uuid. Every publish/read is authorised by the
+# stream-gateway (it validates the Supabase JWT in the ?token= query against the
+# flight + org). Recordings are picked up by the gateway and attached to the flight.
+
+logLevel: info
+logDestinations: [stdout]
+
+###############################################
+# Auth — delegate every action to stream-gateway
+authMethod: http
+authHTTPAddress: http://stream-gateway:9000/auth
+# Internal/control actions don't need a user token.
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+###############################################
+# Control API (used for health checks only; not exposed publicly)
+api: yes
+apiAddress: :9997
+
+###############################################
+# Ingest — from the Android app
+rtmp: yes
+rtmpAddress: :1935
+srt: yes
+srtAddress: :8890
+
+###############################################
+# Playback — to the Pilot Ops browser
+webrtc: yes
+webrtcAddress: :8889
+# Single UDP port multiplexes all WebRTC media; must be reachable from clients.
+webrtcLocalUDPAddress: :8189
+# Comma-separated public hostnames/IPs added to ICE candidates (set per deploy).
+webrtcAdditionalHosts: []
+
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsAlwaysRemux: yes
+
+###############################################
+# Defaults applied to every path (= every flight)
+pathDefaults:
+  # Record each cast to fragmented MP4; one segment per session (24h cap).
+  record: yes
+  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordSegmentDuration: 24h
+
+  # Flip the flight's stream_status offline the moment the controller disconnects.
+  runOnUnpublish: >
+    curl -s -X POST http://stream-gateway:9000/unpublish
+    --data-urlencode "path=$MTX_PATH" || true
+
+  # Hand each finished recording to the gateway to upload + attach to the flight.
+  runOnRecordSegmentComplete: >
+    curl -s -X POST http://stream-gateway:9000/recording-complete
+    --data-urlencode "path=$MTX_PATH"
+    --data-urlencode "file=$MTX_SEGMENT_PATH" || true
+
+paths:
+  all_others:

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GGIS UAV Companion</string>
+    <string name="tagline">Mirror your controller to Pilot Ops</string>
+    <string name="email">Work email</string>
+    <string name="password">Password</string>
+    <string name="sign_in">Sign in</string>
+    <string name="active_mission">Active mission</string>
+    <string name="start_casting">Start casting</string>
+    <string name="idle">Idle</string>
+    <string name="cast_hint">Casting mirrors your whole screen to the mission livestream. Keep the flight app in the foreground.</string>
+</resources>

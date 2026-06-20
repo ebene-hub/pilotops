@@ -121,6 +121,46 @@ browser talks to Supabase on the same origin (Caddy proxies the `/auth`,`/rest`,
 4. Each invitee opens the link → registers → gets a one-time 6-digit pilot code.
 5. Pilots open `https://YOUR_DOMAIN/`, grant location, and start missions.
 
+## Live video — GGIS UAV Companion
+
+The **GGIS UAV Companion** Android app (in `android/`) mirrors the drone
+controller's screen and casts it into the matching flight's **Live stream**. The
+server side is two extra containers in this repo's `docker-compose.yml`:
+
+- **`mediamtx`** — ingests the cast (RTMP/SRT) and redistributes it to the
+  browser as low-latency **WebRTC** (+ HLS), recording each session.
+- **`stream-gateway`** — authorises every publish/read against Supabase (the
+  Android app passes the pilot's access token; the path is the flight uuid) and
+  attaches each finished recording to the flight's media.
+
+### Bring it up
+1. Apply the streaming migration (adds `flights.stream_status`, grants the
+   gateway's `service_role` access): re-run `bash supabase/apply.sh`.
+2. Ensure `.env` has `SUPABASE_SERVICE_ROLE_KEY` set (the gateway needs it) and,
+   for the browser, the same-origin defaults `VITE_STREAM_URL=/stream` /
+   `VITE_STREAM_HLS_URL=/hls` (already wired through Caddy).
+3. `docker compose up -d --build` (brings up `mediamtx` + `stream-gateway` too).
+4. **Open the firewall** for: `1935/tcp` (RTMP ingest) **or** `8890/udp` (SRT),
+   and `8189/udp` (WebRTC media). `443` already serves the WHEP/HLS signalling
+   via Caddy (`/stream`, `/hls`).
+
+### Smoke-test without the app
+Push any clip as a flight's cast and watch it appear in that flight's Live stream
+(`<flightId>` = the flight's uuid; `<jwt>` = a pilot's Supabase access token):
+```bash
+ffmpeg -re -i sample.mp4 -c:v libx264 -tune zerolatency -c:a aac \
+  -f flv "rtmp://YOUR_DOMAIN:1935/<flightId>?token=<jwt>"
+```
+A wrong/expired token, or a flight that isn't `live`, is rejected by the gateway
+(401 in `docker compose logs stream-gateway`). On stop, a `video` row + Storage
+object are attached to the flight.
+
+### The app
+Build + sideload `android/` onto the controllers — see `android/README.md`. Point
+it at this deployment with `STREAM_HOST=YOUR_DOMAIN` (+ `SUPABASE_URL`,
+`SUPABASE_ANON_KEY`). Pilots sign in, start a mission in Pilot Ops, then tap
+**Start casting**.
+
 ## Updating
 - Frontend: `docker compose up -d --build web`.
 - Schema: add a new `supabase/migrations/00NN_*.sql` and re-run `apply.sh`
@@ -134,7 +174,8 @@ Storage volume for uploaded media. Restore with `psql < backup.sql`.
 ## Notes / v1 limitations
 - **Email** (invites/notifications) is **stub-and-logged** to the `notifications`
   table — wire a provider (Resend/SendGrid/SMTP via GoTrue) to actually send.
-- **Live video** is a simulated feed; telemetry/chat/position are real.
+- **Live video** is real when a controller casts via the GGIS UAV Companion app
+  (see above); until a controller connects, the view shows a simulated placeholder.
 - Some admin analytics aggregate from the same real tables; a few secondary
   edit flows (member role management, report authoring) persist partially and
   are the natural next wiring pass.

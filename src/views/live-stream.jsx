@@ -128,7 +128,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
         {/* Video + telemetry */}
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--density-gap)" }}>
           <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-            <FakeVideoFeed showAnnotations={showAnnotations} flash={flash} duration={duration} flight={f} recording={recording}/>
+            <LiveVideoFeed showAnnotations={showAnnotations} flash={flash} duration={duration} flight={f} recording={recording}/>
             {/* Video toolbar */}
             <div style={{ display: "flex", gap: 8, padding: "10px 14px", borderTop: "1px solid var(--border)", alignItems: "center", background: "var(--surface)" }}>
               <button className="btn btn-sm" onClick={() => setRecording(!recording)}>

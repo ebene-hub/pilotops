@@ -24,6 +24,7 @@ import "./views/emergency-launch.jsx";
 import "./views/preflight.jsx";
 import "./views/notify-composer.jsx";
 import "./views/live-stream.jsx";
+import "./views/live-video.jsx";
 import "./views/multi-screen.jsx";
 import "./views/summary-email.jsx";
 import "./views/fleet.jsx";
