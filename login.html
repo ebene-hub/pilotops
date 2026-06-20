@@ -494,6 +494,40 @@
             </div>
           </div>
 
+          <!-- KYC fields, shown in invite mode only; crew block shown for pilots -->
+          <div id="kyc-fields" style="display: none;">
+            <div class="field">
+              <label class="field-label" for="kyc-phone">Phone number</label>
+              <div class="input-wrap"><input id="kyc-phone" class="input" type="tel" autocomplete="tel" placeholder="e.g. +234 801 234 5678"/></div>
+            </div>
+            <div class="field">
+              <label class="field-label" for="kyc-title">Job title / department</label>
+              <div class="input-wrap"><input id="kyc-title" class="input" type="text" placeholder="e.g. Survey GIS Analyst"/></div>
+            </div>
+            <div id="kyc-crew" style="display: none;">
+              <div class="field">
+                <label class="field-label" for="kyc-dob">Date of birth</label>
+                <div class="input-wrap"><input id="kyc-dob" class="input" type="date"/></div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="kyc-govid">Government ID number</label>
+                <div class="input-wrap"><input id="kyc-govid" class="input" type="text" placeholder="National ID / passport no."/></div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="kyc-license">Remote-pilot license number</label>
+                <div class="input-wrap"><input id="kyc-license" class="input" type="text" placeholder="e.g. RPL-12345"/></div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="kyc-license-class">License class / rating</label>
+                <div class="input-wrap"><input id="kyc-license-class" class="input" type="text" placeholder="e.g. Class 2 / BVLOS"/></div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="kyc-license-expiry">License expiry</label>
+                <div class="input-wrap"><input id="kyc-license-expiry" class="input" type="date"/></div>
+              </div>
+            </div>
+          </div>
+
           <div class="field">
             <label class="field-label" for="email">Work email</label>
             <div class="input-wrap">

@@ -71,6 +71,11 @@ async function initInvite() {
   if (inv.message) { const m = $("invite-message"); m.style.display = "block"; m.textContent = "“" + inv.message + "”"; }
 
   show($("name-field"), true);
+  // KYC: everyone provides phone + job title; operating crew also provide
+  // license + DOB/gov-ID. Crew is determined by the invited roles.
+  const isCrew = (inv.roles || []).some((r) => /pilot|field/i.test(r));
+  $("kyc-fields").style.display = "block";
+  $("kyc-crew").style.display = isCrew ? "block" : "none";
   const email = $("email"); email.value = inv.email; email.readOnly = true; email.style.color = "var(--text-3)";
   $("pwd-label").textContent = "Create a password";
   $("password").placeholder = "At least 8 characters"; $("password").setAttribute("autocomplete", "new-password");
@@ -92,6 +97,13 @@ function revealCode(name, code) {
     const d = $("code-display"); d.innerHTML = "";
     code.split("").forEach((ch) => { const e = document.createElement("div"); e.className = "code-digit"; e.textContent = ch; d.appendChild(e); });
   }
+  // KYC verification gate: tell the new member they need admin approval first.
+  const note = document.createElement("p");
+  note.style.cssText = "margin-top:14px;font-size:12.5px;color:var(--text-3);line-height:1.5;";
+  note.textContent = code
+    ? "Your details are pending verification by an admin. Once verified you'll be able to start missions."
+    : "Your details are pending verification by an admin.";
+  $("code-reveal").appendChild(note);
 }
 
 // ---- submit ---------------------------------------------------------------
@@ -115,6 +127,25 @@ async function handleRegister() {
   if (!name) return fail("Enter your full name.");
   if (pwd.length < 8 || !/\d/.test(pwd)) return fail("Password must be at least 8 characters with one number.");
 
+  const isCrew = (activeInvite.roles || []).some((r) => /pilot|field/i.test(r));
+  const kyc = {
+    phone: $("kyc-phone").value.trim(),
+    job_title: $("kyc-title").value.trim(),
+    dob: $("kyc-dob").value || null,
+    gov_id: $("kyc-govid").value.trim(),
+    license: $("kyc-license").value.trim(),
+    license_class: $("kyc-license-class").value.trim(),
+    license_expiry: $("kyc-license-expiry").value || null,
+  };
+  if (!kyc.phone) return fail("Enter your phone number.");
+  if (isCrew) {
+    if (!kyc.dob) return fail("Enter your date of birth.");
+    if (!kyc.gov_id) return fail("Enter your government ID number.");
+    if (!kyc.license) return fail("Enter your remote-pilot license number.");
+    if (!kyc.license_class) return fail("Enter your license class / rating.");
+    if (!kyc.license_expiry) return fail("Enter your license expiry date.");
+  }
+
   submitBtn.disabled = true; submitLabel.innerHTML = '<span class="loading-spin"></span> Creating account…';
 
   const initials = initialsOf(name);
@@ -134,11 +165,21 @@ async function handleRegister() {
   try { await supabase.rpc("accept_invite", { p_token: inviteToken }); }
   catch (e) { /* roles assignment best-effort */ }
 
-  const isPilot = (activeInvite.roles || []).some((r) => /pilot|field/i.test(r));
+  const { data: { user } } = await supabase.auth.getUser();
+
+  // Persist KYC data (status stays 'pending' until an admin verifies).
+  if (user) {
+    await supabase.from("profiles").update({
+      phone: kyc.phone, job_title: kyc.job_title,
+      dob: kyc.dob, gov_id: kyc.gov_id || null,
+      license: kyc.license || null, license_class: kyc.license_class || null,
+      license_expiry: kyc.license_expiry, kyc_submitted_at: new Date().toISOString(),
+    }).eq("id", user.id);
+  }
+
   let code = null;
-  if (isPilot) {
+  if (isCrew && user) {
     code = genCode();
-    const { data: { user } } = await supabase.auth.getUser();
     await supabase.rpc("set_pilot_code", { p_profile: user.id, p_code: code });
   }
   revealCode(name, code);

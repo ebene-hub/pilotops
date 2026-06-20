@@ -26,7 +26,7 @@ export async function currentUser() {
 // Safe profile columns — `select("*")` is denied to authenticated users because
 // the pilot_code_hash column grant is revoked (see 0003_rls.sql).
 export const PROFILE_COLS =
-  "id, short_id, full_name, email, initials, color, license, status, is_admin, admin_role, flight_hours, last_active, pilot_code_set, created_at, updated_at";
+  "id, short_id, full_name, email, initials, color, license, status, is_admin, admin_role, flight_hours, last_active, pilot_code_set, created_at, updated_at, phone, dob, gov_id, license_class, license_expiry, job_title, kyc_status, kyc_submitted_at";
 
 // Convenience: the signed-in user's profile row (or null).
 export async function currentProfile() {

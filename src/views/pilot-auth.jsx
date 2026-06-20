@@ -130,6 +130,15 @@ function PilotAuthModal({ open, onClose, pilot, context, onConfirmed, accentColo
       return;
     }
 
+    // KYC gate: account not yet verified by an admin — no attempt was consumed.
+    if (data && data.kyc === false) {
+      setShake(true);
+      setTimeout(() => setShake(false), 400);
+      setDigits(Array(PILOT_CODE_LENGTH).fill(""));
+      setError(data.reason || "Your account is pending KYC verification by an admin.");
+      return;
+    }
+
     const newAttempts = attempts + 1;
     setAttempts(newAttempts);
     setShake(true);

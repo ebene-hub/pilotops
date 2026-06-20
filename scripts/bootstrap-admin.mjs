@@ -44,7 +44,7 @@ const userId = data.user.id;
 const orgName = process.env.BOOTSTRAP_ORG_NAME || "My Organization";
 const { data: org } = await admin.from("organizations").insert({ name: orgName }).select().single();
 const orgId = org?.id;
-await admin.from("profiles").update({ is_admin: true, admin_role: "Ops Director", org_id: orgId }).eq("id", userId);
+await admin.from("profiles").update({ is_admin: true, admin_role: "Ops Director", org_id: orgId, kyc_status: "verified" }).eq("id", userId);
 const { data: role } = await admin.from("roles").select("id").eq("name", "Director").single();
 if (role) {
   await admin.from("member_roles").upsert({ profile_id: userId, role_id: role.id, org_id: orgId });

@@ -20,6 +20,7 @@ function MembersInvitesView() {
   const [roleFilter, setRoleFilter] = mvUseState("all");
   const [showInvite, setShowInvite] = mvUseState(false);
   const [editingMember, setEditingMember] = mvUseState(null);
+  const [viewingKyc, setViewingKyc] = mvUseState(null);
   const [editingInvite, setEditingInvite] = mvUseState(null);
   const [menuFor, setMenuFor] = mvUseState(null);
 
@@ -133,6 +134,15 @@ function MembersInvitesView() {
     toast({ kind: "info", title: `Member ${newStatus}`, msg: m.name });
     setMenuFor(null);
   }
+  async function setKyc(m, status) {
+    const next = members.map(x => x.id === m.id ? { ...x, kycStatus: status } : x);
+    setMembers(next); ivSaveMembers(next);
+    setMenuFor(null);
+    const { error } = await window.__supabase.rpc("set_kyc_status", { p_profile: m.id, p_status: status });
+    if (error) { toast({ kind: "warn", title: "Update failed", msg: error.message }); return; }
+    try { await refresh(); } catch {}
+    toast({ kind: status === "verified" ? "success" : "info", title: status === "verified" ? "KYC verified" : `KYC ${status}`, msg: m.name });
+  }
 
   const pendingCount = pending.filter(i => i.status === "pending" || i.status === "opened").length;
   const expiredCount = pending.filter(i => i.status === "expired").length;
@@ -200,15 +210,23 @@ function MembersInvitesView() {
                         </div>
                       </td>
                       <td>
-                        {m.status === "active" && <span className="badge badge-success"><span className="dot"/>Active</span>}
-                        {m.status === "suspended" && <span className="badge badge-warning"><span className="dot"/>Suspended</span>}
-                        {m.status === "off-boarded" && <span className="badge"><span className="dot"/>Off-boarded</span>}
+                        <div className="row" style={{ gap: 4, flexWrap: "wrap" }}>
+                          {m.status === "active" && <span className="badge badge-success"><span className="dot"/>Active</span>}
+                          {m.status === "suspended" && <span className="badge badge-warning"><span className="dot"/>Suspended</span>}
+                          {m.status === "off-boarded" && <span className="badge"><span className="dot"/>Off-boarded</span>}
+                          {m.kycStatus === "pending" && <span className="badge badge-warning" title="KYC awaiting verification"><span className="dot"/>KYC pending</span>}
+                          {m.kycStatus === "rejected" && <span className="badge badge-danger" title="KYC rejected"><span className="dot"/>KYC rejected</span>}
+                        </div>
                       </td>
                       <td className="muted" style={{ fontSize: 12 }}>{relativeTime(m.lastActive)}</td>
                       <td style={{ position: "relative" }} onClick={e => e.stopPropagation()}>
                         <button className="btn btn-sm btn-ghost" onClick={() => setMenuFor(menuFor === m.id ? null : m.id)}><Icon name="more" size={14}/></button>
                         {menuFor === m.id && (
                           <div className="menu-pop">
+                            <button onClick={() => { setViewingKyc(m); setMenuFor(null); }}><Icon name="shield" size={12}/> Review KYC</button>
+                            {m.kycStatus !== "verified" && <button onClick={() => setKyc(m, "verified")}><Icon name="check" size={12}/> Verify KYC</button>}
+                            {m.kycStatus !== "rejected" && <button onClick={() => setKyc(m, "rejected")}><Icon name="x" size={12}/> Reject KYC</button>}
+                            <div className="divider"/>
                             <button onClick={() => { setEditingMember(m); setMenuFor(null); }}><Icon name="edit" size={12}/> Edit roles</button>
                             <button onClick={() => copyLink({ token: "demo", email: m.email })}><Icon name="link" size={12}/> Copy profile link</button>
                             {m.status === "active"
@@ -289,6 +307,7 @@ function MembersInvitesView() {
 
       {showInvite && <InviteModal onClose={() => setShowInvite(false)} onSend={sendInvites} existingEmails={[...members.map(m => m.email), ...pending.filter(i => i.status === "pending" || i.status === "opened").map(i => i.email)]}/>}
       {editingMember && <MemberEditModal member={editingMember} onClose={() => setEditingMember(null)} onSave={saveMember}/>}
+      {viewingKyc && <KycReviewModal member={viewingKyc} onClose={() => setViewingKyc(null)} onVerify={() => { setKyc(viewingKyc, "verified"); setViewingKyc(null); }} onReject={() => { setKyc(viewingKyc, "rejected"); setViewingKyc(null); }}/>}
       {editingInvite && <InviteDetailModal invite={editingInvite} onClose={() => setEditingInvite(null)} onCopy={copyLink} onResend={resendInvite} onRevoke={revokeInvite}/>}
 
       <style>{`
@@ -460,6 +479,47 @@ function InviteModal({ onClose, onSend, existingEmails }) {
             </button>
           ))}
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ---------- KYC review modal ---------- */
+function KycReviewModal({ member, onClose, onVerify, onReject }) {
+  const isCrew = (member.roles || []).some(r => /pilot|field/i.test(r));
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString() : "—";
+  const expSoon = member.licenseExpiry && (new Date(member.licenseExpiry) - Date.now()) < 30 * 86400000;
+  const rows = [
+    ["Full name", member.name],
+    ["Email", member.email],
+    ["Phone", member.phone || "—"],
+    ["Job title", member.jobTitle || "—"],
+    ...(isCrew ? [
+      ["Date of birth", fmtDate(member.dob)],
+      ["Government ID", member.govId || "—"],
+      ["License number", member.license || "—"],
+      ["License class", member.licenseClass || "—"],
+      ["License expiry", fmtDate(member.licenseExpiry) + (expSoon ? "  ⚠ expiring soon" : "")],
+    ] : []),
+  ];
+  const statusBadge = member.kycStatus === "verified" ? "badge-success" : member.kycStatus === "rejected" ? "badge-danger" : "badge-warning";
+  return (
+    <Modal open onClose={onClose} icon="shield" size="md"
+      title={`KYC — ${member.name}`}
+      subtitle={isCrew ? "Operating crew · full verification" : "Member · identity check"}
+      footer={<>
+        <button className="btn" onClick={onClose}>Close</button>
+        {member.kycStatus !== "rejected" && <button className="btn" onClick={onReject}><Icon name="x" size={13}/> Reject</button>}
+        {member.kycStatus !== "verified" && <button className="btn btn-primary" onClick={onVerify}><Icon name="check" size={13}/> Verify</button>}
+      </>}>
+      <div style={{ marginBottom: 14 }}>
+        <span className={"badge " + statusBadge}><span className="dot"/>KYC {member.kycStatus || "verified"}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", rowGap: 10, columnGap: 12, fontSize: 13 }}>
+        {rows.map(([k, v]) => <React.Fragment key={k}>
+          <div className="muted" style={{ fontSize: 12 }}>{k}</div>
+          <div style={{ fontWeight: 500, wordBreak: "break-word" }}>{v}</div>
+        </React.Fragment>)}
       </div>
     </Modal>
   );

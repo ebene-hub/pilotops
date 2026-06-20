@@ -32,6 +32,9 @@ function mapProfile(p) {
     role: roles[0] || (p.is_admin ? "Director" : "Member"),
     roles, status: p.status, hours: Number(p.flight_hours || 0), missions: 0,
     isAdmin: p.is_admin, hasCode: !!p.pilot_code_set,
+    kycStatus: p.kyc_status || "verified", phone: p.phone || "",
+    dob: p.dob || "", govId: p.gov_id || "", licenseClass: p.license_class || "",
+    licenseExpiry: p.license_expiry || "", jobTitle: p.job_title || "",
   };
 }
 function mapStation(s) { return { id: s.id, code: s.code, name: s.name, coords: s.coords, lat: s.lat, lng: s.lng }; }
@@ -200,6 +203,8 @@ export async function bootstrap() {
     id: p.id, shortId: p.shortId, name: p.name, email: p.email, initials: p.initials, color: p.color,
     roles: p.roles.length ? p.roles : (p.isAdmin ? ["Director"] : ["Member"]),
     primaryRole: p.role, status: p.status, license: p.license, hasCode: p.hasCode,
+    kycStatus: p.kycStatus, phone: p.phone, dob: p.dob, govId: p.govId,
+    licenseClass: p.licenseClass, licenseExpiry: p.licenseExpiry, jobTitle: p.jobTitle,
     joinedAt: Date.now(), lastActive: Date.now(),
   }));
   window.__poInvites = invitesRaw.map((i) => ({
