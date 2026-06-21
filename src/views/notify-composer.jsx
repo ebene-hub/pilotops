@@ -5,7 +5,7 @@ import { refresh } from "../store.jsx";
 // Pilot Ops — Pre-flight form (PILOT VIEW)
 // Pilot only sees: team selection + mission details + Start Mission button.
 // Notifications, channels and automation are handled automatically per admin rules.
-const { useState: ncUseState, useMemo: ncUseMemo } = React;
+const { useState: ncUseState, useMemo: ncUseMemo, useEffect: ncUseEffect } = React;
 
 function NotifyComposerView({ teamRoster, fieldConfig, onOpenStream }) {
   teamRoster = teamRoster || TEAM_ROSTER;
@@ -13,6 +13,7 @@ function NotifyComposerView({ teamRoster, fieldConfig, onOpenStream }) {
 
   const [launched, setLaunched] = ncUseState(false);
   const [createdFlight, setCreatedFlight] = ncUseState(null);
+  const [pairCode, setPairCode] = ncUseState(null);
   const [showConfirm, setShowConfirm] = ncUseState(false);
   const [authOpen, setAuthOpen] = ncUseState(false);
   // Embedded pre-flight checklist state
@@ -130,6 +131,13 @@ function NotifyComposerView({ teamRoster, fieldConfig, onOpenStream }) {
       kind: "mission_start", context: flightId, detail: { area: form.coverageArea },
     });
 
+    // Mint a pairing code so the pilot can bind the GGIS UAV Companion app on
+    // the controller to this flight (works for co-pilots / shared controllers).
+    try {
+      const { data: code } = await supabase.rpc("start_pairing", { p_flight: flight.id });
+      if (code) setPairCode(code);
+    } catch {}
+
     // Refresh the global store so the new flight shows up everywhere.
     try { await refresh(); } catch {}
 
@@ -144,7 +152,7 @@ function NotifyComposerView({ teamRoster, fieldConfig, onOpenStream }) {
     toast({ kind: "success", title: "Mission started", msg: `${flightId} is live on the dispatch board.` });
   };
 
-  if (launched) return <MissionStartedState flightId={flightId} team={team} teamRoster={teamRoster} form={form} createdFlight={createdFlight} onNew={() => setLaunched(false)} onOpenStream={onOpenStream}/>;
+  if (launched) return <MissionStartedState flightId={flightId} team={team} teamRoster={teamRoster} form={form} createdFlight={createdFlight} pairCode={pairCode} onNew={() => { setLaunched(false); setPairCode(null); }} onOpenStream={onOpenStream}/>;
 
   // Coverage area renderer (dropdown vs text) based on admin config
   const renderCoverageArea = () => {
@@ -429,7 +437,42 @@ function Field({ label, hint, error, required, children }) {
   );
 }
 
-function MissionStartedState({ flightId, team, teamRoster, form, createdFlight, onNew, onOpenStream }) {
+// Watches a flight's stream_status so the pairing panel flips to "connected"
+// the moment the controller starts casting.
+function ControllerPairing({ dbId, pairCode }) {
+  const [connected, setConnected] = ncUseState(false);
+  ncUseEffect(() => {
+    if (!dbId) return;
+    let channel, stop = false;
+    supabase.from("flights").select("stream_status").eq("id", dbId).maybeSingle()
+      .then(({ data }) => { if (!stop && data?.stream_status === "live") setConnected(true); });
+    channel = supabase.channel("pair:" + dbId)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "flights", filter: "id=eq." + dbId },
+        (p) => { if (p.new?.stream_status === "live") setConnected(true); })
+      .subscribe();
+    return () => { stop = true; channel && supabase.removeChannel(channel); };
+  }, [dbId]);
+
+  return (
+    <div style={{ background: connected ? "var(--success-soft)" : "var(--accent-soft)", border: "1px solid " + (connected ? "var(--success)" : "var(--accent)"), borderRadius: 10, padding: 18, marginTop: 18, textAlign: "center" }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Pair your controller</div>
+      {pairCode ? (
+        <div className="mono" style={{ fontSize: 34, fontWeight: 700, letterSpacing: 8, margin: "8px 0 4px" }}>{pairCode}</div>
+      ) : (
+        <div className="muted" style={{ fontSize: 13, margin: "10px 0" }}>Generating code…</div>
+      )}
+      <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+        Open <strong>GGIS UAV Companion</strong> on the controller, sign in, and enter this code to start casting.
+      </div>
+      <div style={{ display: "inline-flex", alignItems: "center", gap: 8, marginTop: 12, fontSize: 12.5, fontWeight: 600, color: connected ? "var(--success)" : "var(--accent)" }}>
+        <span style={{ width: 9, height: 9, borderRadius: "50%", background: "currentColor", animation: connected ? "none" : "pulse 1.5s infinite" }}/>
+        {connected ? "Controller connected — feed is live" : "Waiting for controller…"}
+      </div>
+    </div>
+  );
+}
+
+function MissionStartedState({ flightId, team, teamRoster, form, createdFlight, pairCode, onNew, onOpenStream }) {
   const filled = team.filter(r => r.memberId);
   const flightForStream = createdFlight || ACTIVE_FLIGHTS[0]; // the flight we just created
   return (
@@ -458,6 +501,8 @@ function MissionStartedState({ flightId, team, teamRoster, form, createdFlight, 
               </div>
             ))}
           </div>
+
+          <ControllerPairing dbId={flightForStream?.dbId} pairCode={pairCode}/>
 
           <div className="row" style={{ gap: 8, marginTop: 22, justifyContent: "center" }}>
             <button className="btn" onClick={onNew}><Icon name="plus" size={13}/> New mission</button>

@@ -24,6 +24,10 @@
         </activity>
 
         <activity
+            android:name=".ui.PairActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".ui.CastActivity"
             android:exported="false" />
 

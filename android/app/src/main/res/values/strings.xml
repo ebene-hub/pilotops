@@ -5,6 +5,11 @@
     <string name="email">Work email</string>
     <string name="password">Password</string>
     <string name="sign_in">Sign in</string>
+    <string name="pair_title">Pair controller</string>
+    <string name="pair_hint">Enter the 6-digit code shown in Pilot Ops when the mission started.</string>
+    <string name="pair_code">000000</string>
+    <string name="pair_connect">Connect to mission</string>
+    <string name="pair_use_active">Use my active mission instead</string>
     <string name="active_mission">Active mission</string>
     <string name="start_casting">Start casting</string>
     <string name="idle">Idle</string>

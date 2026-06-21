@@ -46,12 +46,16 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## Use
 
-1. Open **GGIS UAV Companion**, sign in with the pilot's Pilot Ops login.
-2. The app resolves the pilot's **active (live)** mission — start the mission in
-   Pilot Ops first.
-3. Tap **Start casting**, accept Android's screen-capture prompt. The controller
-   screen now appears in that flight's **Live stream** in Pilot Ops.
-4. Tap **Stop casting** to end; the recording is uploaded and attached to the flight.
+1. In Pilot Ops, start the mission. The "Mission started" screen shows a **6-digit
+   pairing code** and waits for the controller.
+2. Open **GGIS UAV Companion**, sign in with a Pilot Ops login.
+3. Enter the **pairing code** and tap **Connect to mission** (this works for the
+   pilot, a co-pilot, or a shared controller). Or tap *Use my active mission* to
+   skip the code if you're the pilot-in-command.
+4. Tap **Start casting**, accept Android's screen-capture prompt. The controller
+   screen now appears in that flight's **Live stream**, and Pilot Ops flips to
+   "Controller connected".
+5. Tap **Stop casting** to end; the recording is uploaded and attached to the flight.
 
 ## Notes / limits
 

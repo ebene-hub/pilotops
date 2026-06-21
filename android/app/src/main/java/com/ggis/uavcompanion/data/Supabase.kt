@@ -63,6 +63,25 @@ object Supabase {
         }
     }
 
+    /** Exchange a pairing code (shown in Pilot Ops) for the bound flight. */
+    fun resolvePairCode(session: Session, code: String): Result<Flight?> = runCatching {
+        val body = JSONObject().put("p_code", code.trim())
+        val req = Request.Builder()
+            .url("$base/rest/v1/rpc/resolve_pair_code")
+            .header("apikey", anon)
+            .header("Authorization", "Bearer ${session.accessToken}")
+            .header("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(JSON))
+            .build()
+        http.newCall(req).execute().use { res ->
+            val text = res.body?.string().orEmpty()
+            if (!res.isSuccessful) error("Pairing failed (${res.code})")
+            val o = JSONObject(text)
+            if (!o.optBoolean("ok")) return@use null
+            Flight(o.getString("flight_id"), o.optString("label", null), null)
+        }
+    }
+
     private fun messageOf(body: String): String? = runCatching {
         val o = JSONObject(body)
         o.optString("error_description").ifEmpty { o.optString("msg").ifEmpty { o.optString("error") } }

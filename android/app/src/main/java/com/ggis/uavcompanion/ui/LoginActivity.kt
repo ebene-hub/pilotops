@@ -32,20 +32,12 @@ class LoginActivity : AppCompatActivity() {
             val session = Supabase.signIn(email, password).getOrElse {
                 main.post { busy(false); status(it.message ?: "Sign-in failed.") }; return@thread
             }
-            val flight = Supabase.activeFlight(session).getOrElse {
-                main.post { busy(false); status(it.message ?: "Could not load mission.") }; return@thread
-            }
             main.post {
                 busy(false)
-                if (flight == null) {
-                    status("No active mission. Start a mission in Pilot Ops, then try again.")
-                } else {
-                    startActivity(Intent(this, CastActivity::class.java).apply {
-                        putExtra(CastActivity.EXTRA_TOKEN, session.accessToken)
-                        putExtra(CastActivity.EXTRA_FLIGHT_ID, flight.id)
-                        putExtra(CastActivity.EXTRA_FLIGHT_LABEL, flight.code ?: flight.area ?: flight.id)
-                    })
-                }
+                startActivity(Intent(this, PairActivity::class.java).apply {
+                    putExtra(PairActivity.EXTRA_TOKEN, session.accessToken)
+                    putExtra(PairActivity.EXTRA_USER_ID, session.userId)
+                })
             }
         }
     }
