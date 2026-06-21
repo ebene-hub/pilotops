@@ -3,6 +3,32 @@ import React from "react";
 // CRUD for airframes and batteries. This is where new equipment is registered.
 const { useState: aaUseState, useMemo: aaUseMemo } = React;
 
+// Common UAV models as suggestions. The Model field is free-text (datalist), so
+// any model not listed can still be typed in.
+const DRONE_MODELS = [
+  // DJI Enterprise
+  "DJI Matrice 400", "DJI Matrice 350 RTK", "DJI Matrice 300 RTK",
+  "DJI Matrice 30", "DJI Matrice 30T", "DJI Matrice 4E", "DJI Matrice 4T",
+  "DJI Matrice 4D", "DJI Mavic 3 Enterprise", "DJI Mavic 3 Thermal",
+  "DJI Mavic 3 Multispectral", "DJI Mavic 3 Pro", "DJI Air 3S", "DJI Air 3",
+  "DJI Phantom 4 RTK", "DJI Phantom 4 Multispectral",
+  "DJI Dock 3", "DJI Dock 2", "DJI FlyCart 30",
+  // DJI Agriculture
+  "DJI Agras T50", "DJI Agras T40", "DJI Agras T25",
+  // Autel Robotics
+  "Autel EVO Max 4T", "Autel EVO Max 4N", "Autel EVO II Pro Enterprise",
+  "Autel EVO II Dual 640T", "Autel Dragonfish Pro",
+  // Skydio
+  "Skydio X10", "Skydio X10D", "Skydio X2D",
+  // Parrot
+  "Parrot Anafi USA", "Parrot Anafi Ai",
+  // Fixed-wing / VTOL mapping
+  "WingtraOne GEN II", "Quantum Systems Trinity Pro", "Quantum Systems Vector",
+  "senseFly eBee X",
+  // Others
+  "Freefly Astro", "Freefly Alta X", "Sony Airpeak S1", "Yuneec H520E",
+];
+
 function AdminAircraftView() {
   const toast = useToast();
   const sb = window.__supabase;
@@ -234,19 +260,16 @@ function AdminAircraftView() {
             <Fld label="Aircraft ID" hint="Auto-generated — editable">
               <input className="input mono" value={editingAc.id} onChange={e => setEditingAc({ ...editingAc, id: e.target.value })}/>
             </Fld>
-            <Fld label="Model">
-              <select className="select" value={editingAc.model} onChange={e => setEditingAc({ ...editingAc, model: e.target.value })}>
-                <option>Skyhawk 6X</option>
-                <option>Skyhawk 8X Pro</option>
-                <option>Pelican-Q</option>
-                <option>Pelican-Q Max</option>
-                <option>Heron Mini</option>
-                <option>Heron 2</option>
-                <option>Phoenix-VTOL</option>
-              </select>
+            <Fld label="Model" hint="Pick a model or type your own">
+              <input className="input" list="drone-models" value={editingAc.model || ""}
+                onChange={e => setEditingAc({ ...editingAc, model: e.target.value })}
+                placeholder="e.g. DJI Matrice 350 RTK"/>
+              <datalist id="drone-models">
+                {DRONE_MODELS.map(m => <option key={m} value={m}/>)}
+              </datalist>
             </Fld>
             <Fld label="Serial number" hint="From manufacturer">
-              <input className="input mono" value={editingAc.serial || ""} onChange={e => setEditingAc({ ...editingAc, serial: e.target.value })} placeholder="e.g. SH6X-2026-1248"/>
+              <input className="input mono" value={editingAc.serial || ""} onChange={e => setEditingAc({ ...editingAc, serial: e.target.value })} placeholder="from the airframe label"/>
             </Fld>
             <Fld label="Payload">
               <select className="select" value={editingAc.payload} onChange={e => setEditingAc({ ...editingAc, payload: e.target.value })}>
