@@ -8,12 +8,12 @@ fun prop(name: String, default: String): String =
 
 android {
     namespace = "com.ggis.uavcompanion"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.ggis.uavcompanion"
         minSdk = 24
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
@@ -39,8 +39,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
 }
 
@@ -53,5 +56,5 @@ dependencies {
 
     // Screen capture (MediaProjection) → RTMP/SRT encoder.
     // github.com/pedroSG94/RootEncoder
-    implementation("com.github.pedroSG94.RootEncoder:library:2.5.7")
+    implementation("com.github.pedroSG94.RootEncoder:library:2.7.5")
 }

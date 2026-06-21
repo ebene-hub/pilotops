@@ -8,23 +8,31 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.ggis.uavcompanion.R
 import com.ggis.uavcompanion.ui.CastActivity
 import com.pedro.common.ConnectChecker
-import com.pedro.library.generic.GenericDisplay
+import com.pedro.encoder.input.sources.audio.NoAudioSource
+import com.pedro.encoder.input.sources.video.NoVideoSource
+import com.pedro.encoder.input.sources.video.ScreenSource
+import com.pedro.library.generic.GenericStream
 import kotlin.math.max
 import kotlin.math.min
 
 /**
  * Foreground service that mirrors the controller screen (MediaProjection) and
- * streams it (RTMP/SRT) to MediaMTX. Holds the encoder for the cast's lifetime.
+ * streams it (RTMP/SRT) to MediaMTX. Video-only (no mic) — uses RootEncoder's
+ * GenericStream with a ScreenSource.
  */
 class ScreenCastService : Service(), ConnectChecker {
 
-    private var display: GenericDisplay? = null
+    private var stream: GenericStream? = null
+    private var projection: MediaProjection? = null
+    private val mpm by lazy { getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -46,24 +54,42 @@ class ScreenCastService : Service(), ConnectChecker {
 
         CastBus.emit(CastStatus.Connecting)
 
-        val disp = GenericDisplay(this, true, this)
-        disp.setIntentResult(resultCode, data)
-        display = disp
-
         val metrics = resources.displayMetrics
         val maxLong = 1280
         val scale = min(1f, maxLong.toFloat() / max(metrics.widthPixels, metrics.heightPixels))
         val w = (metrics.widthPixels * scale).toInt().let { it - it % 2 }
         val h = (metrics.heightPixels * scale).toInt().let { it - it % 2 }
+        val rotation = if (metrics.heightPixels > metrics.widthPixels) 90 else 0
 
-        val ok = disp.prepareVideo(w, h, FPS, BITRATE, 0, metrics.densityDpi) && disp.prepareAudio()
-        if (!ok) { CastBus.emit(CastStatus.Failed("Encoder init failed")); stopCast(); return }
-        disp.startStream(url)
+        val s = GenericStream(this, this, NoVideoSource(), NoAudioSource()).apply {
+            // MediaProjection only emits frames when the screen changes — force a
+            // steady frame rate so the feed stays smooth on a static screen.
+            getGlInterface().setForceRender(true, 15)
+        }
+        stream = s
+
+        val prepared = try {
+            s.prepareVideo(w, h, BITRATE, FPS, rotation = rotation) && s.prepareAudio(32000, true, 128 * 1000)
+        } catch (_: Exception) { false }
+        if (!prepared) { CastBus.emit(CastStatus.Failed("Encoder init failed")); stopCast(); return }
+
+        val mp = mpm.getMediaProjection(resultCode, data)
+        if (mp == null) { CastBus.emit(CastStatus.Failed("Screen capture unavailable")); stopCast(); return }
+        projection = mp
+        try {
+            s.changeVideoSource(ScreenSource(applicationContext, mp))
+            s.startStream(url)
+        } catch (e: Exception) {
+            CastBus.emit(CastStatus.Failed(e.message ?: "Could not start cast")); stopCast()
+        }
     }
 
     private fun stopCast() {
-        try { display?.let { if (it.isStreaming) it.stopStream() } } catch (_: Exception) {}
-        display = null
+        try { stream?.let { if (it.isStreaming) it.stopStream() } } catch (_: Exception) {}
+        try { stream?.release() } catch (_: Exception) {}
+        stream = null
+        try { projection?.stop() } catch (_: Exception) {}
+        projection = null
         CastBus.emit(CastStatus.Stopped)
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE) else @Suppress("DEPRECATION") stopForeground(true)
         stopSelf()
@@ -82,9 +108,7 @@ class ScreenCastService : Service(), ConnectChecker {
     private fun startInForeground() {
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
-            mgr.createNotificationChannel(
-                NotificationChannel(CHANNEL, "Live cast", NotificationManager.IMPORTANCE_LOW)
-            )
+            mgr.createNotificationChannel(NotificationChannel(CHANNEL, "Live cast", NotificationManager.IMPORTANCE_LOW))
         }
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, CastActivity::class.java),

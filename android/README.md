@@ -20,7 +20,10 @@ of drone brand.
 
 ## Build
 
-Requires Android Studio (Giraffe+) or the Android SDK + JDK 17.
+Open the `android/` folder in Android Studio, or build from the CLI. Verified
+toolchain: **JDK 17+ (Android Studio's bundled JBR works), Gradle 8.11.1 (wrapper
+included), Android Gradle Plugin 8.9.1, Kotlin 2.3.21, compileSdk 36, RootEncoder
+2.7.5**. The SDK platform/build-tools auto-download on first build.
 
 1. Set the deployment values (Pilot Ops domain + anon key). Either edit
    `gradle.properties`, or pass `-P` flags / put them in `~/.gradle/gradle.properties`:
@@ -34,8 +37,6 @@ Requires Android Studio (Giraffe+) or the Android SDK + JDK 17.
    ```
    ./gradlew :app:assembleDebug
    ```
-   (First open in Android Studio to provision the Gradle wrapper jar, or run
-   `gradle wrapper` once.)
    Output: `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Sideload onto a controller
