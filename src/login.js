@@ -167,14 +167,17 @@ async function handleRegister() {
 
   const { data: { user } } = await supabase.auth.getUser();
 
-  // Persist KYC data (status stays 'pending' until an admin verifies).
+  // Persist KYC data (status stays 'pending' until an admin verifies). Only the
+  // member-writable columns — kyc_status/kyc_submitted_at are admin/server-set,
+  // and including them here would make Postgres reject the whole update.
   if (user) {
-    await supabase.from("profiles").update({
+    const { error: kycErr } = await supabase.from("profiles").update({
       phone: kyc.phone, job_title: kyc.job_title,
-      dob: kyc.dob, gov_id: kyc.gov_id || null,
+      dob: kyc.dob || null, gov_id: kyc.gov_id || null,
       license: kyc.license || null, license_class: kyc.license_class || null,
-      license_expiry: kyc.license_expiry, kyc_submitted_at: new Date().toISOString(),
+      license_expiry: kyc.license_expiry || null,
     }).eq("id", user.id);
+    if (kycErr) console.warn("KYC save failed:", kycErr.message);
   }
 
   let code = null;
