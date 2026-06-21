@@ -1,0 +1,15 @@
+# Pilot Ops — static hosting on Netlify.
+# Set VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY (and optionally VITE_STREAM_URL /
+# VITE_STREAM_HLS_URL for live video) as build environment variables in the
+# Netlify dashboard — they bake into the bundle at build time.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Existing files (login.html, admin.html, assets, …) are served as-is; only
+# unknown paths fall back to the SPA entry.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

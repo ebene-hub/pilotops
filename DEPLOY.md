@@ -1,5 +1,10 @@
 # Deploying Pilot Ops (self-hosted, Docker)
 
+> **Prefer managed hosting (no Docker for the app)?** See **[DEPLOY-CLOUD.md](DEPLOY-CLOUD.md)**
+> — Supabase Cloud + a static host (Vercel/Netlify). This guide is the all-in-one
+> self-hosted path.
+
+
 Pilot Ops is a static Vite/React frontend backed by **self-hosted Supabase**
 (Postgres + Auth + REST + Realtime + Storage). This guide brings up the whole
 stack on one Linux server behind HTTPS.
