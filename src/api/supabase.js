@@ -9,8 +9,15 @@ if (!url || !anonKey) {
   console.error("Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY — set them in .env");
 }
 
+// The Admin console (/admin*.html) and Pilot Ops (/, /login.html) are separate
+// areas on the same origin. Give each its own auth storage key so signing out of
+// one does NOT end the other's session — and you can be signed into both
+// independently (e.g. admin console + a pilot session in the same browser).
+const isAdminArea = typeof location !== "undefined" && /admin/i.test(location.pathname);
+const storageKey = isAdminArea ? "po-auth-admin" : "po-auth-pilot";
+
 export const supabase = createClient(url, anonKey, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey },
 });
 
 // Also expose on window so the global-script view modules (which don't import)
