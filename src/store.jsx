@@ -116,6 +116,16 @@ export async function bootstrap() {
 
   const flights = flightsRaw.map((f) => mapFlight(f, liveSet));
   const activeFlights = flights.filter((f) => f.status === "live");
+
+  // Real per-flight hours (completed flights) for the live pilot-performance
+  // dashboard — duration from started→ended; day/night by launch hour.
+  const flightHours = flightsRaw
+    .filter((f) => f.started_at && f.ended_at)
+    .map((f) => {
+      const start = new Date(f.started_at), end = new Date(f.ended_at);
+      const h = start.getHours();
+      return { date: f.ended_at, minutes: Math.max(0, (end - start) / 60000), night: (h < 6 || h >= 18), pilotId: f.pilot_id };
+    });
   const recentFlights = flightsRaw
     .filter((f) => f.status === "completed" || f.status === "flagged")
     .slice(0, 12)
@@ -161,6 +171,7 @@ export async function bootstrap() {
   const data = {
     SECTORS: sectors,
     PILOTS: pilots,
+    FLIGHT_HOURS: flightHours,
     STATIONS: stations.map(mapStation),
     UAVS: aircraft.map((a) => ({ id: a.id, model: a.model, payload: a.payload, battery: a.battery ?? 100 })),
     AIRCRAFT: aircraft,
@@ -175,7 +186,7 @@ export async function bootstrap() {
     LOGBOOK_ENTRIES: logbookRaw.map((l) => {
       const dur = Number(l.duration_min || 0);
       return {
-        id: l.id, date: l.date, time: "", aircraft: l.aircraft_type, model: l.aircraft_type,
+        id: l.id, pilotId: l.pilot_id, date: l.date, time: "", aircraft: l.aircraft_type, model: l.aircraft_type,
         area: "", role: "PIC", duration: dur, day: l.night ? 0 : dur, night: l.night ? dur : 0,
         bvlos: l.bvlos ? dur : 0, vlos: l.bvlos ? 0 : dur, ldgs: 1, mode: l.conditions || "Auto", notes: l.notes,
       };

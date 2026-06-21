@@ -4,25 +4,36 @@ import React from "react";
 // Shareable: link / email / PDF / scheduled digest.
 const { useState: apdUseState, useMemo: apdUseMemo, useRef: apdUseRef } = React;
 
+// Monday-start of the week containing d.
+function startOfWeek(d) {
+  const x = new Date(d); const dow = (x.getDay() + 6) % 7;
+  x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - dow); return x;
+}
+
 /* ---------- Per-pilot rollups from real data ---------- */
-// Lifetime hours come from the profile (real). MTD/night/BVLOS/flight counts and
-// currency expiries aggregate from real flights/logbook/currencies as those
-// accumulate; until then they are zero/unknown — no fabricated numbers.
+// Lifetime hours come from the profile. MTD hours + flight counts aggregate from
+// real completed flights (FLIGHT_HOURS); night/BVLOS come from logbook entries
+// when pilots log them; license expiry from the pilot's KYC license_expiry. All
+// real — zero/blank until data accumulates, never fabricated.
 function pilotRollup(p) {
-  const mine = (window.LOGBOOK_ENTRIES || []).filter((l) => l.pilot_id === p.id || l.pilotId === p.id);
-  const monthCut = new Date(); monthCut.setDate(1);
-  const mtd = mine.filter((l) => l.date && new Date(l.date) >= monthCut);
-  const sum = (arr, k) => arr.reduce((s, l) => s + (Number(l[k]) || 0), 0) / 60;
+  const fh = (window.FLIGHT_HOURS || []).filter((f) => f.pilotId === p.id);
+  const log = (window.LOGBOOK_ENTRIES || []).filter((l) => l.pilotId === p.id);
+  const monthCut = new Date(); monthCut.setDate(1); monthCut.setHours(0, 0, 0, 0);
+  const mtd = fh.filter((f) => f.date && new Date(f.date) >= monthCut);
+  const hrs = (arr) => arr.reduce((s, f) => s + (Number(f.minutes) || 0), 0) / 60;
+  const logHrs = (arr, k) => arr.reduce((s, l) => s + (Number(l[k]) || 0), 0) / 60;
+  const lastDate = fh.map((f) => f.date).filter(Boolean).sort().slice(-1)[0];
+  const expiryDays = p.licenseExpiry ? Math.ceil((new Date(p.licenseExpiry) - Date.now()) / 86400000) : null;
   return {
     ...p,
-    monthHours: +sum(mtd, "duration").toFixed(1),
-    nightHours: +sum(mine, "night").toFixed(1),
-    bvlosHours: +sum(mine, "bvlos").toFixed(1),
+    monthHours: +hrs(mtd).toFixed(1),
+    nightHours: +logHrs(log, "night").toFixed(1),
+    bvlosHours: +logHrs(log, "bvlos").toFixed(1),
     flightsMtd: mtd.length,
     incidents90: 0,
-    expiryDays: null,
-    expiryStatus: "ok",
-    lastFlight: mine[0]?.date || "—",
+    expiryDays,
+    expiryStatus: expiryDays == null ? "unknown" : expiryDays < 14 ? "warn" : expiryDays < 60 ? "watch" : "ok",
+    lastFlight: lastDate ? new Date(lastDate).toLocaleDateString() : "—",
   };
 }
 
@@ -36,32 +47,38 @@ function AdminPilotDashboardView() {
   const pilots = apdUseMemo(() => PILOTS.map(pilotRollup), []);
   const totals = apdUseMemo(() => ({
     pilots: pilots.length,
-    activeWeek: pilots.filter(p => /today|hr|yesterday|days ago/.test(p.lastFlight)).length,
-    totalHours: pilots.reduce((s, p) => s + p.hours, 0),
+    activeWeek: new Set((window.FLIGHT_HOURS || []).filter(f => f.date && (Date.now() - new Date(f.date)) < 7 * 86400000).map(f => f.pilotId)).size,
+    totalHours: pilots.reduce((s, p) => s + (Number(p.hours) || 0), 0),
     monthHours: pilots.reduce((s, p) => s + p.monthHours, 0),
     flightsMtd: pilots.reduce((s, p) => s + p.flightsMtd, 0),
     incidents: pilots.reduce((s, p) => s + p.incidents90, 0),
-    expiringSoon: pilots.filter(p => p.expiryDays < 30).length,
+    expiringSoon: pilots.filter(p => p.expiryDays != null && p.expiryDays < 30).length,
     bvlosHours: pilots.reduce((s, p) => s + p.bvlosHours, 0),
     nightHours: pilots.reduce((s, p) => s + p.nightHours, 0),
   }), [pilots]);
 
-  // Weekly hours stacked across pilots (synthetic)
+  // Weekly hours stacked across all pilots — real completed flights, last 12 weeks.
   const weekly = apdUseMemo(() => {
-    const weeks = ["W14","W15","W16","W17","W18","W19","W20","W21","W22","W23","W24","W25"];
-    return weeks.map((w, i) => ({
-      label: w,
-      day:   38 + Math.round(Math.sin(i * 0.55) * 12 + i * 1.1),
-      night: 4  + Math.round(Math.cos(i * 0.6)  * 3  + (i > 6 ? 2 : 0)),
-    }));
-  }, []);
-  const maxWeek = Math.max(...weekly.map(w => w.day + w.night));
+    const N = 12;
+    const thisStart = startOfWeek(new Date());
+    const buckets = Array.from({ length: N }, (_, k) => {
+      const s = new Date(thisStart); s.setDate(thisStart.getDate() - (N - 1 - k) * 7);
+      return { start: s, label: s.toLocaleDateString(undefined, { month: "short", day: "numeric" }), day: 0, night: 0 };
+    });
+    (window.FLIGHT_HOURS || []).forEach((f) => {
+      if (!f.date) return;
+      const idx = Math.round((startOfWeek(new Date(f.date)) - buckets[0].start) / (7 * 86400000));
+      if (idx >= 0 && idx < N) { const h = (Number(f.minutes) || 0) / 60; if (f.night) buckets[idx].night += h; else buckets[idx].day += h; }
+    });
+    return buckets.map((b) => ({ label: b.label, day: Math.round(b.day * 10) / 10, night: Math.round(b.night * 10) / 10 }));
+  }, [pilots]);
+  const maxWeek = Math.max(1, ...weekly.map(w => w.day + w.night));
 
   // Top performers by hours flown this month
   const topPerformers = [...pilots].sort((a, b) => b.monthHours - a.monthHours).slice(0, 5);
 
-  // Currency expiring soon
-  const expiring = pilots.filter(p => p.expiryDays < 60).sort((a, b) => a.expiryDays - b.expiryDays);
+  // Currency expiring soon (only pilots with a known license expiry)
+  const expiring = pilots.filter(p => p.expiryDays != null && p.expiryDays < 60).sort((a, b) => a.expiryDays - b.expiryDays);
 
   // Date stamp (for the share-able "snapshot")
   const today = new Date().toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
@@ -111,8 +128,8 @@ function AdminPilotDashboardView() {
                  delta={`${totals.incidents} incidents flagged`} trend={totals.incidents > 0 ? "down" : "up"}
                  spark={[42,49,55,61,68,72,totals.flightsMtd]} color="#7c3aed"/>
         <KpiTile label="Currency alerts" value={totals.expiringSoon} unit={`/ ${totals.pilots}`}
-                 delta="2 critical · 14d" trend="down"
-                 spark={[2,2,3,3,4,4,totals.expiringSoon]} color="var(--warning)"/>
+                 delta={`${expiring.length} within 60 days`} trend={totals.expiringSoon > 0 ? "down" : "up"}
+                 spark={[0,0,0,0,0,0,totals.expiringSoon]} color="var(--warning)"/>
       </div>
 
       {/* Mid: chart + side panels */}
@@ -139,9 +156,9 @@ function AdminPilotDashboardView() {
             </div>
             <div style={{ display: "flex", gap: 24, justifyContent: "center", marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
               <StatBlk label="Total" value={`${(totals.totalHours).toFixed(0)} hr`}/>
-              <StatBlk label="BVLOS" value={`${totals.bvlosHours.toFixed(0)} hr`} sub={`${((totals.bvlosHours / totals.totalHours) * 100).toFixed(0)}%`}/>
-              <StatBlk label="Night ops" value={`${totals.nightHours.toFixed(0)} hr`} sub={`${((totals.nightHours / totals.totalHours) * 100).toFixed(0)}%`}/>
-              <StatBlk label="Per-pilot avg" value={`${(totals.totalHours / totals.pilots).toFixed(0)} hr`}/>
+              <StatBlk label="BVLOS" value={`${totals.bvlosHours.toFixed(0)} hr`} sub={totals.totalHours ? `${((totals.bvlosHours / totals.totalHours) * 100).toFixed(0)}%` : "—"}/>
+              <StatBlk label="Night ops" value={`${totals.nightHours.toFixed(0)} hr`} sub={totals.totalHours ? `${((totals.nightHours / totals.totalHours) * 100).toFixed(0)}%` : "—"}/>
+              <StatBlk label="Per-pilot avg" value={`${(totals.pilots ? totals.totalHours / totals.pilots : 0).toFixed(0)} hr`}/>
             </div>
           </div>
         </div>
@@ -227,8 +244,8 @@ function AdminPilotDashboardView() {
             </thead>
             <tbody>
               {pilots.map(p => {
-                const tone = p.expiryStatus === "warn" ? "var(--danger)" : p.expiryStatus === "watch" ? "var(--warning)" : "var(--success)";
-                const txt = p.expiryStatus === "warn" ? `${p.expiryDays}d ⚠` : p.expiryStatus === "watch" ? `${p.expiryDays}d` : "OK";
+                const tone = p.expiryStatus === "warn" ? "var(--danger)" : p.expiryStatus === "watch" ? "var(--warning)" : p.expiryStatus === "unknown" ? "var(--text-3)" : "var(--success)";
+                const txt = p.expiryStatus === "warn" ? `${p.expiryDays}d ⚠` : p.expiryStatus === "watch" ? `${p.expiryDays}d` : p.expiryStatus === "unknown" ? "—" : "OK";
                 return (
                   <tr key={p.id} className="clickable" onClick={() => setPilotDetail(p)}>
                     <td>
@@ -236,7 +253,7 @@ function AdminPilotDashboardView() {
                         <div className="user-avatar" style={{ width: 28, height: 28, fontSize: 10, background: `linear-gradient(135deg, ${p.color}, color-mix(in oklab, ${p.color} 70%, #000))` }}>{p.initials}</div>
                         <div>
                           <div style={{ fontSize: 13, fontWeight: 500 }}>{p.name}</div>
-                          <div className="mono muted" style={{ fontSize: 10.5 }}>{p.id}</div>
+                          <div className="mono muted" style={{ fontSize: 10.5 }}>{p.shortId || p.id}</div>
                         </div>
                       </div>
                     </td>
@@ -268,7 +285,7 @@ function AdminPilotDashboardView() {
 
       {/* Pilot detail drilldown */}
       {pilotDetail && (
-        <Modal open onClose={() => setPilotDetail(null)} title={pilotDetail.name} subtitle={`${pilotDetail.license} · ${pilotDetail.id}`} icon="users" size="lg"
+        <Modal open onClose={() => setPilotDetail(null)} title={pilotDetail.name} subtitle={`${pilotDetail.license || "—"} · ${pilotDetail.shortId || pilotDetail.id}`} icon="users" size="lg"
                footer={<>
                  <button className="btn" onClick={() => setPilotDetail(null)}>Close</button>
                  <a href={`/#logbook`} className="btn btn-primary" style={{ textDecoration: "none" }}><Icon name="reports" size={14}/> Open full logbook</a>
@@ -282,7 +299,7 @@ function AdminPilotDashboardView() {
               ["Flights MTD", pilotDetail.flightsMtd],
               ["Lifetime flights", pilotDetail.missions],
               ["Last flight", pilotDetail.lastFlight],
-              ["License", pilotDetail.expiryDays + " days remaining"],
+              ["License", pilotDetail.expiryDays != null ? pilotDetail.expiryDays + " days remaining" : "—"],
             ].map(([k, v]) => (
               <div key={k}>
                 <div style={{ fontSize: 11, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{k}</div>
