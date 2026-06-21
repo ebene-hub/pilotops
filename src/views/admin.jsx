@@ -470,7 +470,9 @@ function FormFieldsTab({ fieldConfig, setFieldConfig }) {
     const rows = ["coverageArea", "purpose", "flightStation", "uav"].map((k) => ({
       key: k, type: fieldConfig[k]?.type || "dropdown", options: fieldConfig[k]?.options || [],
     }));
-    const { error } = await sb.from("form_field_config").upsert(rows, { onConflict: "key" });
+    // PK is (org_id, key) since multitenancy; org_id is auto-stamped by the
+    // set_org_id trigger, so the conflict target must include it.
+    const { error } = await sb.from("form_field_config").upsert(rows, { onConflict: "org_id,key" });
     setSaving(false);
     if (error) { toast({ kind: "warn", title: "Save failed", msg: error.message }); return; }
     try { await refresh(); } catch {}
