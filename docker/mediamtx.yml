@@ -48,21 +48,13 @@ hlsAlwaysRemux: yes
 # Defaults applied to every path (= every flight)
 pathDefaults:
   # Record each cast to fragmented MP4; one segment per session (24h cap).
+  # The stream-gateway watches this folder and uploads finished recordings, and
+  # polls the MediaMTX API to flip flights offline — so no shell/curl hooks are
+  # needed here (the official MediaMTX image has no shell).
   record: yes
   recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
   recordFormat: fmp4
   recordSegmentDuration: 24h
-
-  # Flip the flight's stream_status offline the moment the controller disconnects.
-  runOnUnpublish: >
-    curl -s -X POST http://stream-gateway:9000/unpublish
-    --data-urlencode "path=$MTX_PATH" || true
-
-  # Hand each finished recording to the gateway to upload + attach to the flight.
-  runOnRecordSegmentComplete: >
-    curl -s -X POST http://stream-gateway:9000/recording-complete
-    --data-urlencode "path=$MTX_PATH"
-    --data-urlencode "file=$MTX_SEGMENT_PATH" || true
 
 paths:
   all_others:

@@ -1,0 +1,20 @@
+# Automatic HTTPS for the stream server. Caddy fetches a Let's Encrypt cert for
+# {$STREAM_DOMAIN} (needs port 80 reachable + DNS pointing here first).
+#
+# Pilot Ops addresses WHEP at <VITE_STREAM_URL>/<flightId>/whep and HLS at
+# <VITE_STREAM_HLS_URL>/<flightId>/index.m3u8 — so set those to .../stream and
+# .../hls. The prefix is stripped before proxying to MediaMTX.
+# (WebRTC media itself flows over UDP 8189 directly, not through Caddy.)
+
+{$STREAM_DOMAIN} {
+	handle_path /stream/* {
+		reverse_proxy mediamtx:8889
+	}
+	handle_path /hls/* {
+		reverse_proxy mediamtx:8888
+	}
+	handle {
+		respond "Pilot Ops stream server" 200
+	}
+	encode gzip
+}

@@ -69,7 +69,7 @@ services:
       SUPABASE_URL: ${STREAM_SUPABASE_URL:-http://kong:8000}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
     volumes:
-      - mediamtx_recordings:/recordings:ro
+      - mediamtx_recordings:/recordings
     networks:
       - default
       - supabase

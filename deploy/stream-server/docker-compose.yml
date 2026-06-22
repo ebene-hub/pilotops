@@ -1,0 +1,60 @@
+# Pilot Ops — live-video stream server (managed deployment).
+#
+# Runs ONLY the media pieces on a small VPS/EC2: MediaMTX (ingest + WebRTC/HLS),
+# the stream-gateway (auth + recording → your Supabase Cloud project), and Caddy
+# for automatic HTTPS. The web app stays on Vercel; the DB/auth/storage stay on
+# Supabase Cloud. Bring it up with:  docker compose up -d --build
+#
+# Requires this repo cloned (it builds the gateway from ../../services and reads
+# the MediaMTX config from ../../docker).
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    restart: unless-stopped
+    depends_on: [stream-gateway]
+    environment:
+      # Advertise the public hostname in WebRTC ICE candidates so browsers can
+      # reach the UDP media port.
+      MTX_WEBRTCADDITIONALHOSTS: ${STREAM_DOMAIN}
+    volumes:
+      - ../../docker/mediamtx.yml:/mediamtx.yml:ro
+      - recordings:/recordings
+    ports:
+      - "1935:1935"        # RTMP ingest (TCP)
+      - "8890:8890/udp"    # SRT ingest (UDP, optional)
+      - "8189:8189/udp"    # WebRTC media (UDP) — must be open in the security group
+    networks: [stream]
+
+  stream-gateway:
+    build: ../../services/stream-gateway
+    restart: unless-stopped
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+    volumes:
+      - recordings:/recordings
+    networks: [stream]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [mediamtx]
+    environment:
+      STREAM_DOMAIN: ${STREAM_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [stream]
+
+networks:
+  stream:
+
+volumes:
+  recordings:
+  caddy_data:
+  caddy_config:
