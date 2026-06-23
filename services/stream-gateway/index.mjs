@@ -27,6 +27,10 @@ const POLL_MS = Number(process.env.POLL_MS || 5000);
 // ~50MB by default). Oversized files are left on disk, not retried — buffering
 // huge files into RAM on every scan was crashing the gateway in a loop.
 const RECORDING_MAX_BYTES = Number(process.env.RECORDING_MAX_MB || 45) * 1024 * 1024;
+// Safety net: purge local recordings older than this so the disk can't fill.
+// Clips that uploaded are already deleted; this only reaps the leftover
+// (oversized/failed) files after a window long enough to retrieve them.
+const RECORDING_RETENTION_DAYS = Number(process.env.RECORDING_RETENTION_DAYS || 7);
 
 if (!URL || !SERVICE_KEY) {
   console.error("stream-gateway: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
@@ -211,8 +215,30 @@ async function scanRecordings() {
   }
 }
 
+// Reap local recordings older than the retention window so the disk can't fill.
+async function cleanupRecordings() {
+  const cutoff = Date.now() - RECORDING_RETENTION_DAYS * 86400000;
+  let dirs;
+  try { dirs = await readdir(RECORDINGS_DIR, { withFileTypes: true }); } catch { return; }
+  for (const d of dirs) {
+    if (!d.isDirectory()) continue;
+    const dirPath = join(RECORDINGS_DIR, d.name);
+    let files; try { files = await readdir(dirPath); } catch { continue; }
+    for (const name of files) {
+      if (!name.endsWith(".mp4")) continue;
+      const fp = join(dirPath, name);
+      let st; try { st = await stat(fp); } catch { continue; }
+      if (st.mtimeMs < cutoff) {
+        try { await unlink(fp); skipRecordings.delete(fp); log("old recording purged (retention)", { name, days: RECORDING_RETENTION_DAYS }); } catch {}
+      }
+    }
+  }
+}
+
 app.listen(PORT, () => {
   log(`stream-gateway listening on :${PORT}`);
   setInterval(reconcile, POLL_MS);
   setInterval(scanRecordings, Math.max(POLL_MS, 15000));
+  cleanupRecordings();
+  setInterval(cleanupRecordings, 6 * 60 * 60 * 1000); // every 6h
 });
