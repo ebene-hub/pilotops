@@ -56,6 +56,15 @@
     .tile > video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--stage); }
     .tile-wait { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); font-size: 12px; }
     .tile.live .tile-wait { display: none; }
+    .tile-max { position: absolute; top: 8px; right: 8px; z-index: 2; width: 34px; height: 34px; border-radius: 7px;
+      border: none; background: rgba(0,0,0,.5); color: #fff; display: grid; place-items: center; cursor: pointer;
+      opacity: 0; transition: opacity .15s, background .15s; }
+    .tile:hover .tile-max, .tile.focused .tile-max { opacity: 1; }
+    .tile-max:hover { background: rgba(0,0,0,.78); }
+    .tile-max svg { width: 16px; height: 16px; }
+    @media (hover: none) { .tile-max { opacity: 1; } }
+    .tile:fullscreen { border-radius: 0; }
+    .tile:fullscreen > video { object-fit: contain; }
     .tile-wait .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #e2a03f;
       margin-right: 6px; animation: pulse 1.5s infinite; vertical-align: middle; }
     .tile-label { position: absolute; left: 0; right: 0; bottom: 0; padding: 16px 12px 9px; font-size: 12px;

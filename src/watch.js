@@ -69,17 +69,26 @@ function connectTile(t) {
     });
 }
 
+const MAX_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/></svg>`;
+
 function addTile(s) {
   const el = document.createElement("div");
   el.className = "tile";
   el.innerHTML =
     `<video autoplay muted playsinline></video>` +
     `<div class="tile-wait"><span class="dot"></span>Connecting…</div>` +
+    `<button class="tile-max" title="Maximize this feed" aria-label="Maximize this feed">${MAX_ICON}</button>` +
     `<div class="tile-label"><span class="livedot"></span><b>${escapeHtml(s.code || "Live")}</b>` +
     `<span class="area">${escapeHtml(s.area || "")}${s.pilot ? " · " + escapeHtml(s.pilot) : ""}</span></div>`;
   const t = { el, video: el.querySelector("video"), pc: null, gen: 0,
     flightId: s.flight, key: s.key, label: s.code || "Live" };
   el.addEventListener("click", () => setFocus(t.flightId));
+  // Maximize just this feed (fullscreen the tile); don't also trigger focus.
+  el.querySelector(".tile-max").addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else el.requestFullscreen?.();
+  });
   tiles.set(s.flight, t);
   grid.appendChild(el);
   connectTile(t);
