@@ -3,7 +3,7 @@ import { supabase } from "../api/supabase.js";
 import { getCurrentPosition } from "../api/geo.js";
 import { refresh } from "../store.jsx";
 // Pilot Ops — Incident reporting form
-const { useState: irUseState, useEffect: irUseEffect, useMemo: irUseMemo } = React;
+const { useState: irUseState, useEffect: irUseEffect, useRef: irUseRef } = React;
 
 function IncidentReportView({ basemap, setBasemap }) {
   const [files, setFiles] = irUseState([]);
@@ -15,41 +15,76 @@ function IncidentReportView({ basemap, setBasemap }) {
     location: "", flight: "", lat: null, lng: null,
   });
   const [busy, setBusy] = irUseState(false);
+  const [incidentId, setIncidentId] = irUseState(() => "INC-" + Date.now().toString().slice(-6));
+  const fileInput = irUseRef(null);
   const toast = useToast();
   const update = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const incidentId = irUseMemo(() => "INC-" + Date.now().toString().slice(-6), []);
 
   // Default the pin to the reporter's real location (best effort).
   irUseEffect(() => {
     let cancelled = false;
     getCurrentPosition()
       .then((p) => { if (!cancelled) setForm(f => ({ ...f, lat: p.lat, lng: p.lng, location: f.location || `${p.lat.toFixed(5)}°, ${p.lng.toFixed(5)}°` })); })
-      .catch(() => { /* user can type/pin manually */ });
+      .catch(() => { /* user can pin on the map / type manually */ });
     return () => { cancelled = true; };
   }, []);
 
+  // ---- Media attachments ----
+  const fmtBytes = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : (n / 1048576).toFixed(1) + " MB";
+  const addFiles = (list) => {
+    const picked = Array.from(list || []);
+    if (!picked.length) return;
+    setFiles((prev) => [...prev, ...picked.map((file) => ({
+      id: file.name + ":" + file.size + ":" + file.lastModified,
+      name: file.name, size: fmtBytes(file.size),
+      kind: file.type.startsWith("video") ? "video" : file.type.startsWith("audio") ? "audio" : "image",
+      url: file.type.startsWith("image") ? URL.createObjectURL(file) : null,
+      file,
+    }))]);
+  };
+  const removeFile = (id) => setFiles((prev) => {
+    const f = prev.find((x) => x.id === id); if (f?.url) URL.revokeObjectURL(f.url);
+    return prev.filter((x) => x.id !== id);
+  });
+  async function uploadFiles() {
+    const paths = [];
+    for (const f of files) {
+      if (!f.file) continue;
+      const safe = f.file.name.replace(/[^\w.\-]+/g, "_");
+      const path = `incidents/${incidentId}/${Date.now()}-${safe}`;
+      const { error } = await supabase.storage.from("media").upload(path, f.file, { upsert: true, contentType: f.file.type || undefined });
+      if (!error) paths.push(path); else toast({ kind: "warn", title: "Attachment failed", msg: `${f.name}: ${error.message}` });
+    }
+    return paths;
+  }
+
   const canLog = !window.hasPerm || window.hasPerm("incident.create");
-  const submit = async () => {
+  async function persist(status) {
     if (!canLog) { toast({ kind: "warn", title: "No permission", msg: "Your role can't log incidents." }); return; }
-    if (!form.title.trim()) { toast({ kind: "warn", title: "Add a title", msg: "Describe the incident before submitting." }); return; }
+    if (status === "open" && !form.title.trim()) { toast({ kind: "warn", title: "Add a title", msg: "Describe the incident before submitting." }); return; }
     setBusy(true);
+    const media = await uploadFiles();
     const allFlights = (ACTIVE_FLIGHTS || []).concat(RECENT_FLIGHTS || []);
     const flightDbId = allFlights.find(f => f.id === form.flight)?.dbId || null;
     const { error } = await supabase.from("incidents").insert({
       code: incidentId, flight_id: flightDbId, type: form.type, severity: form.severity,
-      place: form.location || form.title, lat: form.lat, lng: form.lng,
-      reporter_id: window.__poUser?.id || null, status: "open",
-      description: form.title + (form.desc ? " — " + form.desc : ""),
-      visualize: { links },
+      place: form.location || form.title || form.type, lat: form.lat, lng: form.lng,
+      reporter_id: window.__poUser?.id || null, status,
+      description: (form.title.trim() || "(draft)") + (form.desc ? " — " + form.desc : ""),
+      visualize: { links, media },
     });
     setBusy(false);
-    if (error) { toast({ kind: "warn", title: "Could not log incident", msg: error.message }); return; }
-    await supabase.from("notifications").insert({ type: "incident", payload: { incident: incidentId, severity: form.severity }, recipients: [] });
+    if (error) { toast({ kind: "warn", title: status === "draft" ? "Could not save draft" : "Could not log incident", msg: error.message }); return; }
+    if (status === "open") await supabase.from("notifications").insert({ type: "incident", payload: { incident: incidentId, severity: form.severity }, recipients: [] });
     try { await refresh(); } catch {}
-    toast({ kind: "success", title: "Incident logged", msg: `${incidentId} recorded.` });
+    toast({ kind: "success", title: status === "draft" ? "Draft saved" : "Incident logged", msg: `${incidentId} ${status === "draft" ? "saved as draft" : "recorded"}.` });
+    files.forEach((f) => f.url && URL.revokeObjectURL(f.url));
+    setFiles([]); setLinks([]);
     setForm(f => ({ ...f, title: "", desc: "" }));
-    setLinks([]);
-  };
+    setIncidentId("INC-" + Date.now().toString().slice(-6));
+  }
+  const submit = () => persist("open");
+  const saveDraft = () => persist("draft");
 
   return (
     <div className="main-content">
@@ -59,7 +94,7 @@ function IncidentReportView({ basemap, setBasemap }) {
           <div className="page-sub">Capture observations · saved to the incident log (Admin console → Safety → Incident log)</div>
         </div>
         <div className="page-actions">
-          <button className="btn">Save draft</button>
+          <button className="btn" onClick={saveDraft} disabled={busy || !canLog}>Save draft</button>
           <button className="btn btn-primary" onClick={submit} disabled={busy || !canLog} title={canLog ? "" : "Your role can't log incidents"}><Icon name="send" size={14}/> {busy ? "Submitting…" : "Submit incident"}</button>
         </div>
       </div>
@@ -125,39 +160,42 @@ function IncidentReportView({ basemap, setBasemap }) {
             <div className="card-head">
               <div className="card-title">Media</div>
               <div className="muted" style={{ marginLeft: 8, fontSize: 12 }}>{files.length} attached</div>
-              <button className="btn btn-sm btn-ghost" style={{ marginLeft: "auto" }}><Icon name="upload" size={12}/> Browse</button>
+              <button className="btn btn-sm btn-ghost" style={{ marginLeft: "auto" }} onClick={() => fileInput.current?.click()}><Icon name="upload" size={12}/> Browse</button>
+              <input ref={fileInput} type="file" multiple accept="image/*,video/*,audio/*" style={{ display: "none" }}
+                     onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }}/>
             </div>
             <div className="card-body">
               {/* Dropzone */}
-              <div style={{ border: "2px dashed var(--border-strong)", borderRadius: 12, padding: 24, textAlign: "center", background: "var(--bg-subtle)", marginBottom: 14, cursor: "pointer" }}>
+              <div onClick={() => fileInput.current?.click()}
+                   onDragOver={(e) => e.preventDefault()}
+                   onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files); }}
+                   style={{ border: "2px dashed var(--border-strong)", borderRadius: 12, padding: 24, textAlign: "center", background: "var(--bg-subtle)", marginBottom: 14, cursor: "pointer" }}>
                 <Icon name="upload" size={24} stroke="var(--text-3)"/>
                 <div style={{ fontWeight: 500, marginTop: 8 }}>Drop photos, videos or audio here</div>
-                <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>JPG · PNG · MP4 · MOV · WAV · up to 500 MB each</div>
+                <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>or click to browse · JPG · PNG · MP4 · MOV · WAV</div>
               </div>
 
               {/* File grid */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
-                {files.map(f => (
-                  <div key={f.name} style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-                    <div style={{ aspectRatio: "4/3", background: `linear-gradient(135deg, hsl(${f.thumb} 30% 25%), hsl(${(f.thumb + 60) % 360} 40% 18%))`, position: "relative" }}>
-                      {f.kind === "video" && (
-                        <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
-                          <div style={{ background: "rgba(0,0,0,0.5)", borderRadius: "50%", width: 32, height: 32, display: "grid", placeItems: "center" }}>
-                            <Icon name="play" size={12} stroke="white" fill="white"/>
-                          </div>
-                        </div>
-                      )}
-                      <button className="iconbtn" style={{ position: "absolute", top: 4, right: 4, width: 22, height: 22, background: "rgba(0,0,0,0.4)", color: "white" }} onClick={() => setFiles(files.filter(x => x.name !== f.name))}>
-                        <Icon name="x" size={10}/>
-                      </button>
+              {files.length > 0 && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+                  {files.map(f => (
+                    <div key={f.id} style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+                      <div style={{ aspectRatio: "4/3", background: "var(--bg-muted)", position: "relative", display: "grid", placeItems: "center" }}>
+                        {f.url
+                          ? <img src={f.url} alt={f.name} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}/>
+                          : <Icon name={f.kind === "video" ? "play" : "doc"} size={20} stroke="var(--text-3)"/>}
+                        <button className="iconbtn" style={{ position: "absolute", top: 4, right: 4, width: 22, height: 22, background: "rgba(0,0,0,0.4)", color: "white" }} onClick={() => removeFile(f.id)}>
+                          <Icon name="x" size={10}/>
+                        </button>
+                      </div>
+                      <div style={{ padding: "6px 8px" }}>
+                        <div className="mono" style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                        <div className="muted" style={{ fontSize: 10 }}>{f.size}</div>
+                      </div>
                     </div>
-                    <div style={{ padding: "6px 8px" }}>
-                      <div className="mono" style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
-                      <div className="muted" style={{ fontSize: 10 }}>{f.size}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
 
               {/* Links */}
               <div className="field-label" style={{ marginBottom: 8 }}>External links</div>
@@ -183,8 +221,14 @@ function IncidentReportView({ basemap, setBasemap }) {
           <div className="card" style={{ padding: 0 }}>
             <div className="card-head">
               <div className="card-title">Pin location</div>
+              <span className="muted" style={{ marginLeft: "auto", fontSize: 11 }}>Click the map to place the pin</span>
             </div>
-            <MapCanvas basemap={basemap} pins={[{ lat: form.lat, lng: form.lng, x: 48, y: 38, color: "var(--danger)", label: form.title.slice(0, 18) || "Incident", size: 7 }]} height={240} showLegend={false}/>
+            <MapCanvas basemap={basemap}
+              onPick={(c) => setForm(f => ({ ...f, lat: c.lat, lng: c.lng, location: `${c.lat.toFixed(5)}°, ${c.lng.toFixed(5)}°` }))}
+              pins={(form.lat != null && form.lng != null)
+                ? [{ lat: form.lat, lng: form.lng, color: "var(--danger)", label: form.title.slice(0, 18) || "Incident", kind: "incident" }]
+                : []}
+              height={240} showLegend={false}/>
           </div>
 
           <div className="card">
