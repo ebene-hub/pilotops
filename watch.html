@@ -32,6 +32,12 @@
     .msg .who .time { color: #64748b; font-weight: 400; font-size: 10px; margin-left: 6px; font-family: ui-monospace, monospace; }
     .msg .text { font-size: 12.5px; color: #cbd5e1; line-height: 1.45; margin-top: 2px; }
     .chat .empty { color: #64748b; font-size: 12px; text-align: center; padding: 16px; }
+    .chat .msg.guest .who { color: #38bdf8; }
+    .send { display: flex; gap: 6px; padding: 8px; border-top: 1px solid #1c2433; }
+    .send input { flex: 1; min-width: 0; background: #0b0f17; border: 1px solid #1c2433; color: #e5e9f0; border-radius: 6px; padding: 8px 10px; font-size: 13px; outline: none; }
+    .send input:focus { border-color: #2563eb; }
+    .send button { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 0 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .send button:disabled { opacity: .5; cursor: default; }
     .err { margin: auto; text-align: center; color: #94a3b8; padding: 24px; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
     @media (max-width: 800px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 240px; } }
@@ -53,6 +59,10 @@
       <div class="chat">
         <h3>Mission chat</h3>
         <div class="msgs" id="msgs"><div class="empty">No messages yet.</div></div>
+        <form class="send" id="sendForm" autocomplete="off">
+          <input id="chatinput" placeholder="Message the crew…" maxlength="1000" />
+          <button type="submit" id="sendBtn">Send</button>
+        </form>
       </div>
     </main>
   </div>

@@ -64,22 +64,39 @@ function relTime(ts) {
 }
 function initials(name) { return (name || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase(); }
 
-async function pollChat() {
+function renderChat(msgs) {
+  const box = $("msgs");
+  if (!msgs.length) { box.innerHTML = '<div class="empty">No messages yet.</div>'; return; }
+  box.innerHTML = msgs.map((m) => `
+    <div class="msg ${m.role === "guest" ? "guest" : ""}">
+      <div class="who">${escapeHtml(m.from || "Crew")}<span class="time">${relTime(m.at)}</span></div>
+      <div class="text">${escapeHtml(m.text || "")}</div>
+    </div>`).join("");
+  box.scrollTop = box.scrollHeight;
+}
+async function pollChatOnce() {
   const { data } = await sb.rpc("get_public_chat", { p_flight: flightId, p_key: key });
-  if (data?.ok) {
-    const msgs = data.messages || [];
-    const box = $("msgs");
-    if (!msgs.length) { box.innerHTML = '<div class="empty">No messages yet.</div>'; }
-    else {
-      box.innerHTML = msgs.map((m) => `
-        <div class="msg">
-          <div class="who">${escapeHtml(m.from || "Crew")}<span class="time">${relTime(m.at)}</span></div>
-          <div class="text">${escapeHtml(m.text || "")}</div>
-        </div>`).join("");
-      box.scrollTop = box.scrollHeight;
-    }
-  }
-  setTimeout(pollChat, 4000);
+  if (data?.ok) renderChat(data.messages || []);
+}
+function chatLoop() { pollChatOnce().finally(() => setTimeout(chatLoop, 4000)); }
+
+function nameFor() {
+  let n = localStorage.getItem("po:watch:name") || "";
+  if (!n) { n = (prompt("Your name to chat as:") || "").trim().slice(0, 40); if (n) localStorage.setItem("po:watch:name", n); }
+  return n || "Guest";
+}
+function wireSend() {
+  const form = $("sendForm"), input = $("chatinput"), btn = $("sendBtn");
+  if (!form) return;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    btn.disabled = true;
+    const { data } = await sb.rpc("post_public_chat", { p_flight: flightId, p_key: key, p_name: nameFor(), p_text: text });
+    btn.disabled = false;
+    if (data?.ok) { input.value = ""; pollChatOnce(); }
+  });
 }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
@@ -91,5 +108,6 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&a
   $("meta").textContent = `${data.area || ""}${data.pilot ? " · " + data.pilot : ""}`;
   if (data.status !== "live") setWaiting("Mission not currently live");
   connectStream();
-  pollChat();
+  chatLoop();
+  wireSend();
 })();
