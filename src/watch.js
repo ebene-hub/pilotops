@@ -16,7 +16,7 @@ let key = params.get("k") || "";
 const watchKey = params.get("org") || "";
 
 const $ = (id) => document.getElementById(id);
-const video = $("v"), waiting = $("waiting"), rec = $("rec"), liveBadge = $("liveBadge");
+const video = $("v"), waiting = $("waiting"), liveBadge = $("liveBadge");
 
 function fail(msg) {
   $("main").innerHTML = `<div class="err">${msg}</div>`;
@@ -24,10 +24,26 @@ function fail(msg) {
 function setLive(on) {
   video.style.display = on ? "block" : "none";
   waiting.style.display = on ? "none" : "grid";
-  rec.classList.toggle("on", on);
   liveBadge.classList.toggle("on", on);
 }
-function setWaiting(text) { waiting.innerHTML = `<span class="dot"></span>${text}`; }
+function setWaiting(text) { waiting.innerHTML = `<div class="inner"><span class="dot"></span>${text}</div>`; }
+
+// Teams-style controls: fullscreen + collapsible chat.
+function wireUi() {
+  const app = $("app");
+  const stage = document.querySelector(".stage");
+  $("btnFs")?.addEventListener("click", () => {
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else (stage || app)?.requestFullscreen?.();
+  });
+  const toggleChat = () => {
+    const hidden = app.classList.toggle("chat-hidden");
+    $("btnChat")?.classList.toggle("active", !hidden);
+  };
+  $("btnChat")?.addEventListener("click", toggleChat);
+  $("chatMin")?.addEventListener("click", toggleChat);
+}
+wireUi();
 
 // Minimal WHEP client (same protocol as the in-app player).
 async function whepPlay(url, el) {
