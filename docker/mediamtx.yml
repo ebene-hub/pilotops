@@ -47,11 +47,13 @@ hlsAlwaysRemux: yes
 ###############################################
 # Defaults applied to every path (= every flight)
 pathDefaults:
-  # Record each cast to fragmented MP4; one segment per session (24h cap).
-  # The stream-gateway watches this folder and uploads finished recordings, and
-  # polls the MediaMTX API to flip flights offline — so no shell/curl hooks are
-  # needed here (the official MediaMTX image has no shell).
-  record: yes
+  # Auto-recording is DISABLED for now — recordings are managed manually so video
+  # volume/size stays under control (a long mission can produce 100s of MB and a
+  # single t2.micro / Supabase free tier can't absorb that). Live casting (WebRTC
+  # /WHEP) is unaffected; nothing is written to disk. Flip back to `record: yes`
+  # (and pick a storage backend, e.g. S3) to re-enable automatic recording.
+  # The stream-gateway still polls the MediaMTX API to flip flights offline.
+  record: no
   recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
   recordFormat: fmp4
   recordSegmentDuration: 24h
