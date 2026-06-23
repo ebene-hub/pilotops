@@ -7,8 +7,33 @@ const { useState: raUseState, useMemo: raUseMemo } = React;
 function ReportsArchiveView() {
   const [q, setQ] = raUseState("");
   const [tab, setTab] = raUseState("All");
+  const [status, setStatus] = raUseState("all"); // all | published | draft
   const [busy, setBusy] = raUseState(false);
   const toast = useToast();
+
+  function cycleStatus() {
+    const order = ["all", "published", "draft"];
+    setStatus(order[(order.indexOf(status) + 1) % order.length]);
+  }
+  function exportAll() {
+    const rows = REPORTS_ARCHIVE;
+    if (!rows.length) { toast({ kind: "info", title: "Nothing to export", msg: "No reports yet." }); return; }
+    const head = ["Code", "Title", "Type", "Author", "Date", "Flights", "Incidents", "Status"];
+    const lines = [head].concat(rows.map(r => [r.id, r.title, r.type, r.author, r.date, r.flights, r.incidents, r.status]));
+    const csv = lines.map(row => row.map(c => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a"); a.href = url; a.download = `reports-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    toast({ kind: "success", title: "Exported", msg: `${rows.length} reports → CSV` });
+  }
+  // Live "reports per author" from the real archive.
+  const perAuthor = raUseMemo(() => {
+    const palette = ["var(--accent)", "#7c3aed", "#0891b2", "#16a34a", "#d97706", "#db2777"];
+    const m = {};
+    REPORTS_ARCHIVE.forEach(r => { const a = r.author || "—"; m[a] = (m[a] || 0) + 1; });
+    return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 6)
+      .map(([label, val], i) => ({ label, val, color: palette[i % palette.length] }));
+  }, []);
 
   async function newReport() {
     const title = window.prompt("Report title");
@@ -25,8 +50,9 @@ function ReportsArchiveView() {
   }
   const filtered = raUseMemo(() => REPORTS_ARCHIVE.filter(r =>
     (tab === "All" || r.type === tab) &&
+    (status === "all" || r.status === status) &&
     (!q || (r.title + r.id + r.author).toLowerCase().includes(q.toLowerCase()))
-  ), [q, tab]);
+  ), [q, tab, status]);
 
   return (
     <div className="main-content">
@@ -36,8 +62,10 @@ function ReportsArchiveView() {
           <div className="page-sub">{REPORTS_ARCHIVE.length} reports · {REPORTS_ARCHIVE.filter(r => r.status === "published").length} published · {REPORTS_ARCHIVE.filter(r => r.status === "draft").length} drafts</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="filter" size={14}/> Filter</button>
-          <button className="btn"><Icon name="download" size={14}/> Export all</button>
+          <button className={"btn " + (status !== "all" ? "btn-primary" : "")} onClick={cycleStatus} title="Cycle status filter">
+            <Icon name="filter" size={14}/> {status === "all" ? "Filter" : status[0].toUpperCase() + status.slice(1)}
+          </button>
+          <button className="btn" onClick={exportAll}><Icon name="download" size={14}/> Export all</button>
           <button className="btn btn-primary" onClick={newReport} disabled={busy}><Icon name="plus" size={14}/> New report</button>
         </div>
       </div>
@@ -138,13 +166,9 @@ function ReportsArchiveView() {
         <div className="card">
           <div className="card-head"><div className="card-title">Reports per author</div></div>
           <div className="card-body">
-            <BarChart data={[
-              { label: "Ops Dept",    val: 24, color: "var(--accent)" },
-              { label: "Ops Assistant",     val: 18, color: "#7c3aed" },
-              { label: "A. Mensah",   val: 8,  color: "#0891b2" },
-              { label: "M. Rosselló", val: 6,  color: "#16a34a" },
-              { label: "L. Vainio",   val: 5,  color: "#d97706" },
-            ]} horizontal/>
+            {perAuthor.length
+              ? <BarChart data={perAuthor} horizontal/>
+              : <div style={{ padding: 24, textAlign: "center", color: "var(--text-3)", fontSize: 13 }}>No reports yet.</div>}
           </div>
         </div>
       </div>

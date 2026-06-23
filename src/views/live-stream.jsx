@@ -14,6 +14,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   const [duration, setDuration] = lsUseState(0);
   const [chat, setChat] = lsUseState([]);
   const [pos, setPos] = lsUseState(null);
+  const [online, setOnline] = lsUseState(1);
   const [draft, setDraft] = lsUseState("");
   const [recording, setRecording] = lsUseState(false); // per-mission, off by default
   const [recordBusy, setRecordBusy] = lsUseState(false);
@@ -105,10 +106,12 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
     });
     supabase.from("chat_messages").select("*").eq("flight_id", f.dbId).order("created_at")
       .then(({ data }) => setChat((data || []).map(toMsg)));
-    channel = supabase.channel("chat:" + f.dbId)
+    const myKey = window.__poUser?.id || ("g-" + Math.random().toString(36).slice(2, 8));
+    channel = supabase.channel("chat:" + f.dbId, { config: { presence: { key: myKey } } })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages", filter: "flight_id=eq." + f.dbId },
         (payload) => setChat((c) => [...c, toMsg(payload.new)]))
-      .subscribe();
+      .on("presence", { event: "sync" }, () => setOnline(Object.keys(channel.presenceState()).length))
+      .subscribe(async (st) => { if (st === "SUBSCRIBED") await channel.track({ name: window.__poUser?.name || "Crew" }); });
     return () => { channel && supabase.removeChannel(channel); };
   }, [f?.dbId]);
 
@@ -296,7 +299,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
             <div className="card-head">
               <div className="card-title">Mission chat</div>
               <div className="row" style={{ marginLeft: "auto" }}>
-                <span className="badge badge-success"><span className="dot"/>5 online</span>
+                <span className="badge badge-success"><span className="dot"/>{online} online</span>
               </div>
             </div>
             <div style={{ flex: 1, padding: "8px 14px", overflowY: "auto", maxHeight: 360, display: "flex", flexDirection: "column", gap: 10 }}>

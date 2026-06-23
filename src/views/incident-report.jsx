@@ -57,7 +57,7 @@ function IncidentReportView({ basemap, setBasemap }) {
       <div className="page-head">
         <div>
           <h1 className="page-title">Log an incident</h1>
-          <div className="page-sub">Capture observations · attach media · auto-update dashboard indicators</div>
+          <div className="page-sub">Capture observations · saved to the incident log (Admin console → Safety → Incident log)</div>
         </div>
         <div className="page-actions">
           <button className="btn">Save draft</button>

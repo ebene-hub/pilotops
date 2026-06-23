@@ -10,6 +10,7 @@ const ADMIN_NAV = [
   ]},
   { group: "Safety", items: [
     { id: "emergency-reviews", label: "Emergency reviews", icon: "warn" },
+    { id: "incidents",         label: "Incident log",      icon: "warn" },
   ]},
   { group: "Organization", items: [
     { id: "members",       label: "Members & invites",     icon: "users" },
@@ -34,6 +35,7 @@ const ADMIN_NAV = [
 const ADMIN_TITLES = {
   "pilot-dash":       ["Dashboards",        "Pilot performance"],
   "emergency-reviews": ["Safety",           "Emergency reviews"],
+  incidents:          ["Safety",            "Incident log"],
   members:            ["Organization",      "Members & invites"],
   team:               ["Organization",      "Team roster"],
   roles:         ["Organization",      "Roles & permissions"],
@@ -268,6 +270,7 @@ function AdminViewRenderer({ view, teamRoster, setTeamRoster, fieldConfig, setFi
   switch (view) {
     case "pilot-dash":         return <AdminPilotDashboardView/>;
     case "emergency-reviews":  return <AdminEmergencyReviewView/>;
+    case "incidents":          return <AdminPage title="Incident log" sub="Every incident logged by crew, saved to the incidents table. Filter and export to CSV."><AdminIncidentsView/></AdminPage>;
     case "members":            return <AdminPage title="Members & invites" sub="Everyone who can sign in to Pilot Ops. Invite new members by email — they register via a single-use link."><MembersInvitesView/></AdminPage>;
     case "team":               return <AdminPage title="Team roster" sub="Field crew and pilot codes. Pilots pick from this list when starting a mission — codes prevent impersonation."><TeamRosterTab teamRoster={teamRoster} setTeamRoster={setTeamRoster}/></AdminPage>;
     case "roles":         return <AdminPage title="Roles & permissions" sub="What each role can read, write, or approve."><RolesView/></AdminPage>;
