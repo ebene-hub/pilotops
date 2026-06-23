@@ -1,9 +1,11 @@
 # Pilot Ops — Logging & Operations Dashboard
 
 A UAV pilot logging and operations platform: a **Vite + React** multi-page
-frontend backed by **self-hosted Supabase** (Postgres + Auth + Storage +
-Realtime). Real authentication, real data, real device geolocation — no dummy
-data. Deployable with Docker.
+frontend backed by **Supabase** (Postgres + Auth + Storage + Realtime), a
+**real low-latency live-video pipeline** (MediaMTX + a Node stream gateway), and a
+native **Android companion app** that casts the drone controller's screen into the
+matching mission. Real authentication, real data, real device geolocation, real
+video — no dummy data. Deployable with Docker.
 
 ## Run it
 
@@ -33,8 +35,49 @@ npm run build    # production bundle into dist/
 **Real flows:** sign-in/invite registration, start mission (creates a flight +
 captures launch GPS), pilot-code identity check (server RPC), emergency launch
 (server rate-limit + review queue), live position tracking + realtime mission
-chat, incident logging at current location, media upload to Storage, fleet/battery
-registry + status updates.
+chat, **live video casting** from the controller, **per-mission recording**,
+incident logging at current location (persisted + admin-reviewable + CSV export),
+auto-logbook from completed flights, media upload to Storage, fleet/battery
+registry + status updates, and **outgoing webhooks** (Slack/Teams/generic) fired
+on incidents and mission start/end.
+
+## Live video
+
+Live missions stream real video from the drone controller's screen to the
+operator dashboard and a public watch page, with sub-second (WebRTC) latency.
+
+```
+[Controller / Android]  GGIS UAV Companion
+   MediaProjection screen capture → H.264/AAC (RootEncoder)
+        │  RTMP/SRT push, path = <flightId>, auth = Supabase JWT / pair grant / ingest key
+        ▼
+[Server / EC2 + Docker]  MediaMTX  ──external auth──▶  stream-gateway (Node, service_role)
+   • redistributes  ──WebRTC/WHEP──▶  Pilot Ops + public watch page  (+ HLS fallback)
+   • per-mission recording (toggle) ──on close──▶ gateway uploads to Supabase Storage
+        ▲                                              + inserts a media row
+   Caddy fronts /stream (WHEP/HLS) + /record (toggle)
+```
+
+- **GGIS UAV Companion** (`android/`) — Kotlin app for the controller. Pair to a
+  mission by code or pick the pilot's active mission, then it **auto-starts casting**;
+  "End flight" stops the cast and signs the controller out. The capture is
+  drone-agnostic (MediaProjection), so it works on DJI/Autel smart controllers or any
+  Android phone/tablet on the RC.
+- **Stream gateway** (`services/stream-gateway/`) — Node ESM service holding the
+  Supabase `service_role` key. Authorizes every publish/read (by JWT, pair grant, or
+  per-flight ingest key), flips `flights.stream_status` live/offline, exposes the
+  per-mission `/record` toggle, reconciles dropped streams, and uploads finished
+  recordings (size-capped, with retention cleanup).
+- **Public watch page** (`watch.html` / `src/watch.js`) — no-login, Teams-style
+  multi-screen gallery. An org's **permanent watch link** auto-follows whatever
+  missions are live (per-tile maximize + focused read-only/guest chat).
+- **Direct drone ingest API** — for non-DJI craft with no Android controller, each
+  flight exposes a short **ingest key** so any encoder/ground station (OBS, etc.) can
+  push `rtmp://<host>:1935/<flightId>?key=<key>` or the SRT equivalent. Surfaced in
+  the dashboard (Live stream → Direct ingest) and Admin console (System → API &
+  integrations).
+
+See **[DEPLOY.md](DEPLOY.md)** "Live video" and **[android/README.md](android/README.md)**.
 
 ## Pages
 
@@ -58,20 +101,25 @@ stored hashed — verified server-side before each launch.
 
 ## What's included
 
-The full Pilot Ops operator app and all 10 of its views:
+The full Pilot Ops operator app and its views:
 
 | Group       | View                     |
 |-------------|--------------------------|
 | Operations  | Flight Hub               |
 | Operations  | Start mission (embedded pre-flight checklist + 6-digit pilot-code auth) |
-| Operations  | Live stream              |
+| Operations  | Live stream (real WHEP video, per-mission record toggle, share + direct-ingest) |
 | Operations  | Multi-screen ops         |
 | Operations  | Post-flight summary (editable, attach media from gallery) |
 | Fleet       | Aircraft and Batteries   |
 | Storage     | Media gallery            |
-| Logging     | Pilot logbook            |
-| Logging     | Log incident             |
-| Logging     | Flight log archive       |
+| Logging     | Pilot logbook (auto-filled from flights, per-pilot filter, readable flight codes) |
+| Logging     | Log incident (live persist, media upload, click/typed map pin, save draft) |
+| Logging     | Flight log archive (live KPIs, per-author chart, filter + CSV export, new report) |
+
+The **Admin console** (`/admin.html`) adds, among others, an **Incident log**
+(live, status workflow open → escalated → resolved → closed, CSV export) and
+**System → API & integrations** (direct-ingest docs + real outgoing webhook
+manager backed by the `integrations` table).
 
 Plus: emergency-launch flow with abuse guards, Cmd-K command palette, light/dark/
 high-contrast themes, accent + density + basemap tweaks panel, and full responsive
@@ -103,6 +151,7 @@ index.html            # Pilot Ops entry document (no-flash theme init, Geist fon
 admin.html            # Admin console entry document
 login.html            # Pilot Ops sign-in (vanilla)
 admin-login.html      # Admin sign-in with 2FA (vanilla)
+watch.html            # Public, no-login live watch page (Teams-style gallery)
 src/
   main.jsx            # mounts Pilot Ops; imports modules in prototype load order + auth gate
   admin-main.jsx      # mounts the Admin console + admin auth gate
@@ -110,9 +159,18 @@ src/
   admin-app.jsx       # Admin shell: sidebar nav, hash routing, all admin tabs
   shared.jsx          # icons, charts, modal, toast, map canvas, KPI tile
   tweaks-panel.jsx    # appearance tweaks (theme/accent/density/basemap)
-  data.js             # sample data (pilots, flights, incidents, roster, sectors)
+  store.jsx           # on sign-in, loads + maps all real Supabase data into the global shapes
+  data.js             # shared constants + empty/default shapes the store fills
+  watch.js            # public watch-page logic (WHEP tiles + guest chat)
   styles.css          # design tokens, layout, components, responsive + dark mode
-  views/*.jsx         # one file per screen (pilot + admin views)
+  views/*.jsx         # one file per screen (pilot + admin views), incl. live-video.jsx
+supabase/migrations/  # schema, RLS, RPCs — 0001…0022 (streaming, pairing, public watch,
+                      #   auto-logbook, integrations/webhooks, ingest keys)
+services/
+  stream-gateway/     # Node ESM media-auth + recording-upload service (service_role)
+docker/               # mediamtx.yml, Caddyfile, compose overrides for the stream stack
+deploy/stream-server/ # EC2 stream-server Caddyfile + ops notes
+android/              # GGIS UAV Companion (Kotlin) — controller screen-cast app
 ```
 
 ### How the modules talk to each other
@@ -132,11 +190,16 @@ The Pilot Ops dashboard and the Admin console share `data.js`, `shared.jsx`,
 - **Real backend.** All data is in Postgres (Supabase) with row-level security;
   the only `localStorage` usage left is the theme/tweaks UI preference. Lists start
   empty and fill as real users create flights, incidents, media, etc.
-- **v1 limitations** (documented in DEPLOY.md): live **video** is a simulated feed
-  (telemetry/chat/position are real); **email** for invites/notifications is
-  stub-and-logged to the `notifications` table (no SMTP yet). A few secondary admin
-  flows (member role management, report authoring, some dashboard aggregates) persist
-  partially and are the next wiring pass.
+- **Live video is real** — WebRTC (WHEP) from MediaMTX, cast by the GGIS UAV
+  Companion or pushed by any encoder via the direct-ingest key; recordings (when the
+  per-mission toggle is on) upload to Storage and attach to the flight. The pipeline
+  runs on an AWS EC2 box (MediaMTX + stream-gateway + Caddy); see DEPLOY.md and
+  `deploy/stream-server/` for bring-up and redeploy.
+- **Remaining v1 limitations** (documented in DEPLOY.md): **email** for
+  invites/notifications is stub-and-logged to the `notifications` table (no SMTP yet);
+  the long-term **video storage backend** is not yet finalized (small clips go to the
+  gallery, large ones are purged after 7 days pending an S3-class decision), and
+  auto-recording is off by default in favor of the manual per-mission toggle.
 - **Smoke tests** (puppeteer-core via Edge): `smoke-auth-gate.mjs` checks the real
   session gate + login render with no backend; `smoke-map.mjs` checks Leaflet tiles.
   The earlier `smoke-test/-auth/-interactions.mjs` predate the backend and assume a
