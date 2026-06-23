@@ -5,6 +5,8 @@ import { supabase } from "../api/supabase.js";
 const { useState: aiUseState, useEffect: aiUseEffect, useMemo: aiUseMemo } = React;
 
 const SEV_COLOR = { critical: "#b91c1c", high: "var(--danger)", medium: "var(--warning)", low: "var(--success)" };
+const STATUS_COLOR = { open: "var(--warning)", escalated: "var(--danger)", resolved: "var(--success)", closed: "var(--text-3)" };
+const STATUS_OPTS = ["open", "escalated", "resolved", "closed"];
 
 function AdminIncidentsView() {
   const [rows, setRows] = aiUseState([]);
@@ -22,7 +24,7 @@ function AdminIncidentsView() {
     setLoading(false);
     if (error) { toast({ kind: "warn", title: "Couldn't load incidents", msg: error.message }); return; }
     setRows((data || []).map((i) => ({
-      id: i.code || (i.id ? i.id.slice(0, 8).toUpperCase() : "—"),
+      id: i.code || (i.id ? i.id.slice(0, 8).toUpperCase() : "—"), dbId: i.id,
       type: i.type || "—", severity: (i.severity || "—").toLowerCase(),
       place: i.place || "—", reporter: i.reporter?.full_name || "—",
       flight: i.flight?.code || "—", status: i.status || "open",
@@ -31,6 +33,14 @@ function AdminIncidentsView() {
     })));
   }
   aiUseEffect(() => { load(); }, []);
+
+  async function updateRowStatus(dbId, next) {
+    const prev = rows;
+    setRows((rs) => rs.map((r) => (r.dbId === dbId ? { ...r, status: next } : r))); // optimistic
+    const { error } = await supabase.from("incidents").update({ status: next }).eq("id", dbId);
+    if (error) { setRows(prev); toast({ kind: "warn", title: "Couldn't update status", msg: error.message }); }
+    else toast({ kind: "success", title: "Status updated", msg: next.charAt(0).toUpperCase() + next.slice(1) });
+  }
 
   const filtered = aiUseMemo(() => rows.filter((r) =>
     (sev === "all" || r.severity === sev) &&
@@ -88,6 +98,7 @@ function AdminIncidentsView() {
             <select className="select" value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: 120, height: 32, fontSize: 12.5 }}>
               <option value="all">All status</option>
               <option value="open">Open</option>
+              <option value="escalated">Escalated</option>
               <option value="resolved">Resolved</option>
               <option value="closed">Closed</option>
             </select>
@@ -108,7 +119,15 @@ function AdminIncidentsView() {
                   <td style={{ fontSize: 12.5 }}>{r.place}</td>
                   <td style={{ fontSize: 12.5 }}>{r.reporter}</td>
                   <td className="mono" style={{ fontSize: 12 }}>{r.flight}</td>
-                  <td><StatusBadge status={r.status}/></td>
+                  <td>
+                    <select className="select" value={STATUS_OPTS.includes(r.status) ? r.status : "open"}
+                            onChange={(e) => updateRowStatus(r.dbId, e.target.value)}
+                            style={{ height: 28, fontSize: 12, padding: "0 24px 0 8px", fontWeight: 600,
+                                     color: STATUS_COLOR[r.status] || "var(--text-2)",
+                                     borderColor: "color-mix(in oklab, " + (STATUS_COLOR[r.status] || "var(--text-3)") + " 45%, var(--border))" }}>
+                      {STATUS_OPTS.map((s) => <option key={s} value={s} style={{ color: "var(--text)" }}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+                    </select>
+                  </td>
                 </tr>
               ))}
             </tbody>
