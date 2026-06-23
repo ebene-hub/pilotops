@@ -6,14 +6,11 @@ import { refresh } from "../store.jsx";
 const { useState: lsUseState, useEffect: lsUseEffect, useRef: lsUseRef } = React;
 
 function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
-  // Only show a flight that's actually live: the full store flight if it's still
-  // active, else the passed flight if live, else the first active flight — else
-  // nothing (empty state). Avoids rendering a stale/completed flight as "live".
+  // Only show a flight that's genuinely in the live list (don't trust a passed
+  // flight's possibly-stale status). Else the first active flight, else nothing
+  // (empty state) — never render a completed/stale flight as "live".
   const active = window.ACTIVE_FLIGHTS || [];
-  const f = active.find(x => x.dbId && x.dbId === flight?.dbId)
-    || (flight && flight.status === "live" ? flight : null)
-    || active[0]
-    || null;
+  const f = active.find(x => x.dbId && x.dbId === flight?.dbId) || active[0] || null;
   const [duration, setDuration] = lsUseState(0);
   const [chat, setChat] = lsUseState([]);
   const [pos, setPos] = lsUseState(null);
