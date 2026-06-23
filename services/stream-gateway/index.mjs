@@ -48,6 +48,18 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
+// CORS for the browser-facing endpoints (the Pilot Ops web app toggling
+// recording). Auth is by token in the body/query, not cookies, so reflecting the
+// origin is safe. Harmless for the native/server callers (/grant, /auth).
+app.use((req, res, next) => {
+  res.set("Access-Control-Allow-Origin", req.headers.origin || "*");
+  res.set("Vary", "Origin");
+  res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
 const tokenFromQuery = (q) => {
   try { return new URLSearchParams(q || "").get("token") || ""; } catch { return ""; }
 };
@@ -94,6 +106,49 @@ app.post("/grant", async (req, res) => {
   grants.set(flightId, Date.now());
   log("grant ok", { flightId });
   res.sendStatus(200);
+});
+
+// ---- Per-mission recording toggle -------------------------------------------
+// Recording is OFF by default (pathDefaults record:no). The Pilot Ops web app
+// flips it per flight; we add/patch a MediaMTX path config (path = flight id)
+// with record on/off so only chosen missions are saved.
+async function setPathRecord(name, enable) {
+  const body = JSON.stringify({ record: !!enable });
+  const opts = { method: "PATCH", headers: { "Content-Type": "application/json" }, body };
+  let r = await fetch(`${MEDIAMTX_API}/v3/config/paths/patch/${encodeURIComponent(name)}`, opts);
+  if (r.status === 404 || r.status === 400) {
+    r = await fetch(`${MEDIAMTX_API}/v3/config/paths/add/${encodeURIComponent(name)}`,
+      { ...opts, method: "POST" });
+  }
+  if (!r.ok) throw new Error(`mediamtx ${r.status}`);
+}
+async function getPathRecord(name) {
+  try {
+    const r = await fetch(`${MEDIAMTX_API}/v3/config/paths/get/${encodeURIComponent(name)}`);
+    if (!r.ok) return false; // no path-specific config → defaults (record:no)
+    const j = await r.json();
+    return !!j.record;
+  } catch { return false; }
+}
+
+app.post("/record", async (req, res) => {
+  const flightId = (req.body?.flightId || "").trim();
+  const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const enable = !!req.body?.enable;
+  const v = await validatePublisher(token, flightId);
+  if (!v.ok) return res.status(401).json({ ok: false, reason: v.reason });
+  try { await setPathRecord(flightId, enable); }
+  catch (e) { log("record toggle failed", { flightId, enable, err: e.message }); return res.status(502).json({ ok: false, reason: "recorder unavailable" }); }
+  log("record", { flightId, enable });
+  res.json({ ok: true, recording: enable });
+});
+
+app.get("/record", async (req, res) => {
+  const flightId = (req.query?.flightId || "").toString().trim();
+  const token = (req.query?.token || "").toString().trim();
+  const v = await validatePublisher(token, flightId);
+  if (!v.ok) return res.status(401).json({ ok: false, reason: v.reason });
+  res.json({ ok: true, recording: await getPathRecord(flightId) });
 });
 
 // ---- MediaMTX external auth -------------------------------------------------

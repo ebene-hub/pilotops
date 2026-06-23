@@ -15,7 +15,8 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   const [chat, setChat] = lsUseState([]);
   const [pos, setPos] = lsUseState(null);
   const [draft, setDraft] = lsUseState("");
-  const [recording, setRecording] = lsUseState(true);
+  const [recording, setRecording] = lsUseState(false); // per-mission, off by default
+  const [recordBusy, setRecordBusy] = lsUseState(false);
   const [showAnnotations, setShowAnnotations] = lsUseState(true);
   const [flash, setFlash] = lsUseState(false);
   const [screenshots, setScreenshots] = lsUseState([]);
@@ -42,6 +43,39 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
       : "Anyone with this link can watch — no login.";
     try { await navigator.clipboard.writeText(streamLink); toast({ kind: "success", title: "Public link copied", msg }); }
     catch { toast({ kind: "info", title: "Share link", msg: streamLink }); }
+  };
+
+  // Per-mission recording — recording is off by default on the server; this
+  // toggles it for THIS flight via the stream gateway (same host as the feed).
+  const gatewayBase = (() => {
+    try { return new URL(import.meta.env.VITE_STREAM_URL || origin, origin).origin; }
+    catch { return origin; }
+  })();
+  const authToken = async () => {
+    const { data } = await supabase.auth.getSession();
+    return data?.session?.access_token || "";
+  };
+  const toggleRecord = async () => {
+    if (!f?.dbId || recordBusy) return;
+    const enable = !recording;
+    setRecordBusy(true);
+    try {
+      const token = await authToken();
+      const r = await fetch(`${gatewayBase}/record`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flightId: f.dbId, token, enable }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) {
+        setRecording(enable);
+        toast({ kind: "success", title: enable ? "Recording on" : "Recording off",
+          msg: enable ? "This mission is now being recorded." : "Recording stopped for this mission." });
+      } else {
+        toast({ kind: "warn", title: "Couldn't change recording", msg: j.reason || `Error ${r.status}` });
+      }
+    } catch (e) {
+      toast({ kind: "warn", title: "Recorder unreachable", msg: e.message });
+    } finally { setRecordBusy(false); }
   };
   const toggleFullscreen = () => {
     const el = videoBoxRef.current; if (!el) return;
@@ -76,6 +110,22 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
         (payload) => setChat((c) => [...c, toMsg(payload.new)]))
       .subscribe();
     return () => { channel && supabase.removeChannel(channel); };
+  }, [f?.dbId]);
+
+  // Reflect the current recording state for this mission (set on another device
+  // or earlier this session) so the toggle isn't out of sync after a refresh.
+  lsUseEffect(() => {
+    if (!f?.dbId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await authToken();
+        const r = await fetch(`${gatewayBase}/record?flightId=${encodeURIComponent(f.dbId)}&token=${encodeURIComponent(token)}`);
+        const j = await r.json().catch(() => ({}));
+        if (!cancelled && r.ok && j.ok) setRecording(!!j.recording);
+      } catch { /* gateway may be unreachable; leave toggle as-is */ }
+    })();
+    return () => { cancelled = true; };
   }, [f?.dbId]);
 
   // Stream the pilot's real device position to the flight row while live.
@@ -184,8 +234,13 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
             </div>
             {/* Video toolbar */}
             <div style={{ display: "flex", gap: 8, padding: "10px 14px", borderTop: "1px solid var(--border)", alignItems: "center", background: "var(--surface)" }}>
-              <button className="btn btn-sm" onClick={() => setRecording(!recording)}>
-                {recording ? <><span style={{ width: 8, height: 8, borderRadius: 2, background: "var(--danger)" }}/> Recording</> : <><Icon name="play" size={12}/> Paused</>}
+              <button className={"btn btn-sm " + (recording ? "btn-danger" : "")} onClick={toggleRecord} disabled={recordBusy}
+                      title={recording ? "Stop recording this mission" : "Record this mission to the gallery"}>
+                {recordBusy
+                  ? <>…</>
+                  : recording
+                    ? <><span style={{ width: 8, height: 8, borderRadius: "50%", background: "#fff", animation: "pulse 1.5s infinite" }}/> Recording</>
+                    : <><span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--danger)" }}/> Record</>}
               </button>
               <button className="btn btn-sm btn-primary" onClick={screenshot}><Icon name="camera" size={13}/> Screenshot</button>
               <button className={"btn btn-sm " + (showAnnotations ? "btn-primary" : "")} onClick={() => setShowAnnotations(s => !s)}><Icon name="sparkle" size={12}/> AI overlay</button>

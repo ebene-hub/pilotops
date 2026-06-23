@@ -16,6 +16,9 @@
 	handle /grant {
 		reverse_proxy stream-gateway:9000
 	}
+	handle /record {
+		reverse_proxy stream-gateway:9000
+	}
 	handle {
 		respond "Pilot Ops stream server" 200
 	}

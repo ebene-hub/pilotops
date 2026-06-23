@@ -97,8 +97,8 @@ function LiveVideoFeed({ showAnnotations, flash, duration, flight, recording, pl
       <video ref={videoRef} autoPlay muted playsInline
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", display: state === "live" ? "block" : "none", background: "#000" }}/>
 
-      {/* Minimal overlay on the real feed: just the REC badge. */}
-      {state === "live" && (
+      {/* Minimal overlay on the real feed: REC badge only while actually recording. */}
+      {state === "live" && recording && (
         <div style={{ position: "absolute", top: fill ? 8 : 12, left: fill ? 8 : 12, display: "flex", gap: 6, alignItems: "center", color: "white", fontFamily: "var(--font-mono)", fontSize: fill ? 9 : 12, pointerEvents: "none", textShadow: "0 1px 2px rgba(0,0,0,0.7)" }}>
           <span style={{ width: fill ? 6 : 8, height: fill ? 6 : 8, borderRadius: "50%", background: "#ef4444", animation: "pulse 1.5s infinite" }}/>
           <span style={{ fontWeight: 700 }}>REC</span>
