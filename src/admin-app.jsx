@@ -799,7 +799,7 @@ function IntegrationsView() {
           <div style={{ width: 40, height: 40, borderRadius: 10, background: "color-mix(in oklab, var(--accent) 12%, transparent)", color: "var(--accent)", display: "grid", placeItems: "center", flexShrink: 0 }}><Icon name="link" size={18}/></div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="card-title">Outgoing webhooks</div>
-            <div className="muted" style={{ fontSize: 12 }}>POST every new incident to Slack, Microsoft Teams, or any endpoint. Paste an incoming-webhook URL — no OAuth needed.</div>
+            <div className="muted" style={{ fontSize: 12 }}>POST mission start/end and new incidents to Slack, Microsoft Teams, or any endpoint. Paste an incoming-webhook URL — no OAuth needed.</div>
           </div>
         </div>
         <div className="card-body" style={{ display: "grid", gap: 12 }}>
