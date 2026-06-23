@@ -63,6 +63,18 @@ object Supabase {
         }
     }
 
+    /** Pre-authorise a cast: the gateway records a short-lived publish grant for
+     *  this flight so the (token-less) RTMP push that follows is allowed. */
+    fun grantStream(token: String, flightId: String, grantUrl: String): Result<Boolean> = runCatching {
+        val body = JSONObject().put("flightId", flightId).put("token", token)
+        val req = Request.Builder()
+            .url(grantUrl)
+            .header("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(JSON))
+            .build()
+        http.newCall(req).execute().use { res -> res.isSuccessful }
+    }
+
     /** Exchange a pairing code (shown in Pilot Ops) for the bound flight. */
     fun resolvePairCode(session: Session, code: String): Result<Flight?> = runCatching {
         val body = JSONObject().put("p_code", code.trim())

@@ -39,47 +39,79 @@ const tokenFromQuery = (q) => {
   try { return new URLSearchParams(q || "").get("token") || ""; } catch { return ""; }
 };
 const log = (...a) => console.log(new Date().toISOString(), ...a);
+const flipLive = (id) => admin.from("flights").update({ stream_status: "live", stream_started_at: new Date().toISOString() }).eq("id", id);
+
+// Short-lived publish grants. RTMP clients (RootEncoder) drop the URL query, so
+// the token can't ride in the stream URL; instead the app POSTs /grant over
+// HTTPS first, and we authorise the subsequent RTMP publish by that grant.
+const grants = new Map(); // flightId -> timestamp
+const GRANT_TTL = Number(process.env.GRANT_TTL_MS || 300000); // 5 min
+
+// Validate that `token` may publish `flightId` (live flight, same org, crew/admin).
+async function validatePublisher(token, flightId) {
+  if (!token || !flightId) return { ok: false, reason: "missing" };
+  const { data: u } = await admin.auth.getUser(token);
+  const user = u?.user;
+  if (!user) return { ok: false, reason: "bad token" };
+  const [{ data: flight }, { data: profile }] = await Promise.all([
+    admin.from("flights").select("id, org_id, status, pilot_id").eq("id", flightId).maybeSingle(),
+    admin.from("profiles").select("org_id, is_admin").eq("id", user.id).maybeSingle(),
+  ]);
+  if (!flight || !profile) return { ok: false, reason: "unknown flight/profile" };
+  if (flight.org_id !== profile.org_id) return { ok: false, reason: "cross-org" };
+  if (flight.status !== "live") return { ok: false, reason: "not live" };
+  let crew = flight.pilot_id === user.id;
+  if (!crew) {
+    const { data } = await admin.from("flight_crew").select("profile_id").eq("flight_id", flightId).eq("profile_id", user.id).limit(1);
+    crew = (data || []).length > 0;
+  }
+  if (!crew && !profile.is_admin) return { ok: false, reason: "not crew" };
+  return { ok: true };
+}
+
+// ---- App pre-authorises a cast (over HTTPS) before pushing RTMP -------------
+app.post("/grant", async (req, res) => {
+  const flightId = (req.body?.flightId || "").trim();
+  const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const v = await validatePublisher(token, flightId);
+  if (!v.ok) { log("grant deny", { flightId, reason: v.reason }); return res.sendStatus(401); }
+  grants.set(flightId, Date.now());
+  log("grant ok", { flightId });
+  res.sendStatus(200);
+});
 
 // ---- MediaMTX external auth -------------------------------------------------
 app.post("/auth", async (req, res) => {
   const { path = "", query = "", action = "" } = req.body || {};
-  // Control actions are excluded in mediamtx.yml, but be safe.
   if (["api", "metrics", "pprof"].includes(action)) return res.sendStatus(200);
-
   const token = tokenFromQuery(query);
-  if (!token) { log("auth deny: no token", { path, action }); return res.sendStatus(401); }
-
-  // 1. Validate the JWT (hits GoTrue).
-  const { data: u, error: uErr } = await admin.auth.getUser(token);
-  const user = u?.user;
-  if (uErr || !user) { log("auth deny: bad token", { path, action }); return res.sendStatus(401); }
-
-  // 2. The path is the flight uuid. Load flight + the caller's profile.
-  const [{ data: flight }, { data: profile }] = await Promise.all([
-    admin.from("flights").select("id, org_id, status, pilot_id").eq("id", path).maybeSingle(),
-    admin.from("profiles").select("org_id, is_admin").eq("id", user.id).maybeSingle(),
-  ]);
-  if (!flight || !profile) { log("auth deny: unknown flight/profile", { path }); return res.sendStatus(401); }
-
-  // 3. Same-org enforcement (multi-tenant isolation).
-  if (flight.org_id !== profile.org_id) { log("auth deny: cross-org", { path }); return res.sendStatus(401); }
 
   if (action === "publish") {
-    // Only an active flight, cast by its pilot / crew (or an admin), may publish.
-    if (flight.status !== "live") { log("auth deny: flight not live", { path }); return res.sendStatus(401); }
-    let crew = flight.pilot_id === user.id;
-    if (!crew) {
-      const { data } = await admin.from("flight_crew").select("profile_id").eq("flight_id", path).eq("profile_id", user.id).limit(1);
-      crew = (data || []).length > 0;
+    // Path A: a token survived in the query (e.g. ffmpeg) — validate it.
+    if (token) {
+      const v = await validatePublisher(token, path);
+      if (v.ok) { await flipLive(path); log("auth allow publish (token)", { path }); return res.sendStatus(200); }
     }
-    if (!crew && !profile.is_admin) { log("auth deny: not crew", { path, user: user.id }); return res.sendStatus(401); }
-
-    await admin.from("flights").update({ stream_status: "live", stream_started_at: new Date().toISOString() }).eq("id", path);
-    log("auth allow publish", { path, user: user.id });
-    return res.sendStatus(200);
+    // Path B: a recent /grant for this flight (the normal app path).
+    const g = grants.get(path);
+    if (g && Date.now() - g < GRANT_TTL) {
+      const { data: flight } = await admin.from("flights").select("status").eq("id", path).maybeSingle();
+      if (flight?.status === "live") { await flipLive(path); log("auth allow publish (grant)", { path }); return res.sendStatus(200); }
+    }
+    log("auth deny publish", { path, hadToken: !!token });
+    return res.sendStatus(401);
   }
 
-  // read/playback: any authenticated member of the flight's org may view.
+  // read/playback (WHEP/HLS): HTTP keeps the query, so require a valid token in
+  // the same org as the flight.
+  if (!token) { log("auth deny read: no token", { path }); return res.sendStatus(401); }
+  const { data: u } = await admin.auth.getUser(token);
+  if (!u?.user) { log("auth deny read: bad token", { path }); return res.sendStatus(401); }
+  const [{ data: flight }, { data: profile }] = await Promise.all([
+    admin.from("flights").select("org_id").eq("id", path).maybeSingle(),
+    admin.from("profiles").select("org_id").eq("id", u.user.id).maybeSingle(),
+  ]);
+  if (!flight || !profile || flight.org_id !== profile.org_id) { log("auth deny read: org", { path }); return res.sendStatus(401); }
   return res.sendStatus(200);
 });
 

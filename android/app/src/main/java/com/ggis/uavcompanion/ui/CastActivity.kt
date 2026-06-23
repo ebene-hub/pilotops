@@ -6,14 +6,18 @@ import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.ggis.uavcompanion.data.Supabase
 import com.ggis.uavcompanion.databinding.ActivityCastBinding
 import com.ggis.uavcompanion.stream.CastBus
 import com.ggis.uavcompanion.stream.CastStatus
 import com.ggis.uavcompanion.stream.ScreenCastService
 import com.ggis.uavcompanion.stream.StreamConfig
+import kotlin.concurrent.thread
 
 /** Shows the resolved mission and drives start/stop of the screen cast. */
 class CastActivity : AppCompatActivity() {
@@ -22,14 +26,26 @@ class CastActivity : AppCompatActivity() {
     private lateinit var flightId: String
     private lateinit var token: String
     private var casting = false
+    private val main = Handler(Looper.getMainLooper())
 
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { requestProjection() }
 
     private val projection = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         val data = res.data
         if (res.resultCode == RESULT_OK && data != null) {
-            ScreenCastService.start(this, res.resultCode, data, StreamConfig.ingestUrl(flightId, token))
-            casting = true; render()
+            setStatus("Authorizing cast…")
+            thread {
+                // Authorise the publish over HTTPS first (RTMP can't carry the token).
+                val ok = Supabase.grantStream(token, flightId, StreamConfig.grantUrl).getOrDefault(false)
+                main.post {
+                    if (ok) {
+                        ScreenCastService.start(this, res.resultCode, data, StreamConfig.ingestUrl(flightId))
+                        casting = true; render()
+                    } else {
+                        setStatus("Couldn't authorize the cast — check your sign-in and that the mission is live, then retry.")
+                    }
+                }
+            }
         } else {
             setStatus("Screen capture permission was declined.")
         }
