@@ -6,7 +6,9 @@ import { refresh } from "../store.jsx";
 const { useState: lsUseState, useEffect: lsUseEffect, useRef: lsUseRef } = React;
 
 function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
-  const f = flight || ACTIVE_FLIGHTS[0];
+  // Prefer the full, fresh flight from the store (has shareKey/streamStatus and
+  // the correct dbId) over the partial object passed from Start mission.
+  const f = (window.ACTIVE_FLIGHTS || []).find(x => x.dbId && x.dbId === flight?.dbId) || flight || ACTIVE_FLIGHTS[0];
   const [duration, setDuration] = lsUseState(0);
   const [chat, setChat] = lsUseState([]);
   const [pos, setPos] = lsUseState(null);
@@ -36,6 +38,8 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
     if (document.fullscreenElement) document.exitFullscreen?.();
     else el.requestFullscreen?.();
   };
+  // Only crew who can start/manage flights may end one (pilot, commander, admin…).
+  const canEndFlight = !window.hasPerm || window.hasPerm("flight.create");
 
   lsUseEffect(() => {
     const t = setInterval(() => setDuration(d => d + 1), 1000);
@@ -152,7 +156,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
           <button className="btn" onClick={() => { navigator.clipboard?.writeText(streamLink); toast({ kind: "success", title: "Link copied", msg: streamLink }); }}>
             <Icon name="paperclip" size={14}/> Copy URL
           </button>
-          <button className="btn btn-danger" onClick={() => setEndOpen(true)}><Icon name="stop" size={14}/> End flight</button>
+          <button className="btn btn-danger" onClick={() => setEndOpen(true)} disabled={!canEndFlight} title={canEndFlight ? "End the mission" : "Your role can't end missions"}><Icon name="stop" size={14}/> End flight</button>
         </div>
       </div>
 

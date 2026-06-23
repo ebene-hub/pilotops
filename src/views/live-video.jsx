@@ -46,32 +46,39 @@ function LiveVideoFeed({ showAnnotations, flash, duration, flight, recording, pl
   const [state, setState] = lvUseState("connecting"); // connecting | live | waiting
 
   lvUseEffect(() => {
-    let pc, hls, cancelled = false, retry;
+    let pc, hls, cancelled = false, retry, watchdog;
     const video = videoRef.current;
     const id = flight?.dbId || flight?.id;
     if (!id || !video) return;
 
+    function markLive() { if (cancelled) return; clearTimeout(watchdog); setState("live"); }
+    function schedule() { if (cancelled) return; setState("waiting"); clearTimeout(retry); retry = setTimeout(attempt, 3000); }
+    function teardown() {
+      clearTimeout(watchdog);
+      try { pc && pc.close(); } catch {} try { hls && hls.destroy(); } catch {}
+      pc = hls = null;
+      if (video) { video.onplaying = null; video.srcObject = null; }
+    }
     async function attempt() {
       if (cancelled) return;
       const token = await accessToken();
       try {
         pc = await whepPlay(`${STREAM_BASE}/${id}/whep`, video, token);
-        wireConnState(pc);
+        video.onplaying = markLive;                       // frames actually arrived
+        pc.onconnectionstatechange = () => {
+          if (cancelled) return;
+          if (pc.connectionState === "connected") markLive();
+          else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) { teardown(); schedule(); }
+        };
+        pc.oniceconnectionstatechange = () => { if (!cancelled && ["connected", "completed"].includes(pc.iceConnectionState)) markLive(); };
+        // If a "successful" offer never actually plays within 7s, retry cleanly
+        // (avoids getting stuck waiting — no manual refresh needed).
+        watchdog = setTimeout(() => { if (!cancelled) { teardown(); schedule(); } }, 7000);
       } catch {
-        try { hls = await hlsPlay(`${HLS_BASE}/${id}/index.m3u8`, video, token); markLive(); }
+        try { hls = await hlsPlay(`${HLS_BASE}/${id}/index.m3u8`, video, token); video.onplaying = markLive; }
         catch { schedule(); }
       }
     }
-    function wireConnState(p) {
-      p.onconnectionstatechange = () => {
-        if (cancelled) return;
-        if (p.connectionState === "connected") markLive();
-        else if (["failed", "disconnected", "closed"].includes(p.connectionState)) { teardown(); schedule(); }
-      };
-    }
-    function markLive() { if (!cancelled) setState("live"); }
-    function schedule() { if (cancelled) return; setState("waiting"); retry = setTimeout(attempt, 4000); }
-    function teardown() { try { pc && pc.close(); } catch {} try { hls && hls.destroy(); } catch {} pc = hls = null; if (video) video.srcObject = null; }
 
     attempt();
     return () => { cancelled = true; clearTimeout(retry); teardown(); };

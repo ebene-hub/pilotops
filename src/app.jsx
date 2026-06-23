@@ -8,7 +8,7 @@ const { useState: appUseState, useEffect: appUseEffect, useMemo: appUseMemo } = 
 const NAV = [
   { group: "Operations", items: [
     { id: "flight-hub", label: "Flight Hub", icon: "drone" },
-    { id: "notify", label: "Start mission", icon: "play" },
+    { id: "notify", label: "Start mission", icon: "play", perm: "flight.create" },
     { id: "live", label: "Live stream", icon: "video" },
     { id: "multi", label: "Multi-screen ops", icon: "grid" },
     { id: "summary", label: "Post-flight summary", icon: "mail" },
@@ -30,9 +30,10 @@ const NAV = [
 function navWithBadges() {
   const active = (window.ACTIVE_FLIGHTS || []).length;
   return NAV.map(g => ({ ...g, items: g.items.map(it => {
-    if (it.id === "flight-hub" || it.id === "multi") return { ...it, badge: active ? String(active) : null };
-    if (it.id === "live") return { ...it, badge: active ? "LIVE" : null, live: active > 0 };
-    return it;
+    const locked = it.perm && window.hasPerm && !window.hasPerm(it.perm);
+    if (it.id === "flight-hub" || it.id === "multi") return { ...it, locked, badge: active ? String(active) : null };
+    if (it.id === "live") return { ...it, locked, badge: active ? "LIVE" : null, live: active > 0 };
+    return { ...it, locked };
   })}));
 }
 
@@ -173,8 +174,10 @@ function Sidebar({ nav, view, setView, collapsed, onToggle, onMobileClose }) {
             {g.items.map(it => (
               <button key={it.id}
                 className={"nav-item " + (view === it.id ? "active" : "")}
-                onClick={() => setView(it.id)}
-                title={it.label}>
+                onClick={() => !it.locked && setView(it.id)}
+                disabled={it.locked}
+                style={it.locked ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
+                title={it.locked ? "Your role can't start missions" : it.label}>
                 <Icon name={it.icon} size={16}/>
                 <span>{it.label}</span>
                 {it.badge && (
@@ -209,7 +212,7 @@ function Sidebar({ nav, view, setView, collapsed, onToggle, onMobileClose }) {
           {!collapsed && (
             <div className="user-meta">
               <div className="user-name">{window.__poUser?.name || "Dispatcher Kade"}</div>
-              <div className="user-role">{window.__poUser ? "Pilot · signed in" : "Operations Director"}</div>
+              <div className="user-role">{window.__poUser ? `${window.__poUser.role || "Member"} · signed in` : "Operations Director"}</div>
             </div>
           )}
           {!collapsed && (

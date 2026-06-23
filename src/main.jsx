@@ -104,6 +104,9 @@ async function start() {
   const roles = (roleRows || []).map((r) => r.roles?.name).filter(Boolean);
   const hasAccess = prof?.is_admin || roles.some((r) => PILOT_OPS_ROLES.has(r));
   if (!hasAccess) { noAccess(roles); return; }
+  // Surface the user's real role(s) for the sidebar + role-based UI gating.
+  window.__poUser.role = roles[0] || (prof?.is_admin ? "Admin" : "Member");
+  window.__poUser.roles = roles;
 
   splash("Loading operations data…");
   await bootstrap();
