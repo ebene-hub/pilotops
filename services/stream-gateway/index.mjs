@@ -23,11 +23,20 @@ const MEDIA_BUCKET = process.env.MEDIA_BUCKET || "media";
 const MEDIAMTX_API = (process.env.MEDIAMTX_API_URL || "http://mediamtx:9997").replace(/\/$/, "");
 const RECORDINGS_DIR = process.env.RECORDINGS_DIR || "/recordings";
 const POLL_MS = Number(process.env.POLL_MS || 5000);
+// Skip uploading recordings larger than this (Supabase Storage per-file limit is
+// ~50MB by default). Oversized files are left on disk, not retried — buffering
+// huge files into RAM on every scan was crashing the gateway in a loop.
+const RECORDING_MAX_BYTES = Number(process.env.RECORDING_MAX_MB || 45) * 1024 * 1024;
 
 if (!URL || !SERVICE_KEY) {
   console.error("stream-gateway: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
   process.exit(1);
 }
+
+// A stray rejection (e.g. a recording upload error) must never take the whole
+// gateway down — log and keep serving.
+process.on("unhandledRejection", (e) => console.log(new Date().toISOString(), "unhandledRejection", e?.message || String(e)));
+process.on("uncaughtException", (e) => console.log(new Date().toISOString(), "uncaughtException", e?.message || String(e)));
 
 const admin = createClient(URL, SERVICE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
 
@@ -174,6 +183,9 @@ async function reconcile() {
 }
 
 // ---- recordings watcher: upload finished casts, then free local disk ---------
+// Files we've given up on (too large, or a failed upload) — so we don't re-read
+// them into memory on every scan. Reset only on process restart.
+const skipRecordings = new Set();
 async function scanRecordings() {
   let dirs;
   try { dirs = await readdir(RECORDINGS_DIR, { withFileTypes: true }); } catch { return; }
@@ -184,10 +196,17 @@ async function scanRecordings() {
     for (const name of files) {
       if (!name.endsWith(".mp4")) continue;
       const fp = join(dirPath, name);
+      if (skipRecordings.has(fp)) continue;
       let st; try { st = await stat(fp); } catch { continue; }
       if (Date.now() - st.mtimeMs < 20000) continue; // still being written
+      if (st.size > RECORDING_MAX_BYTES) {
+        log("recording too large for storage — left on disk", { name, mb: Math.round(st.size / 1048576) });
+        skipRecordings.add(fp);
+        continue;
+      }
+      // One attempt per file per process lifetime — never retry in a tight loop.
       try { await uploadRecording(flightId, fp, name, st.size); await unlink(fp); }
-      catch (e) { log("recording upload failed (will retry)", e.message); }
+      catch (e) { log("recording upload failed — left on disk", e.message); skipRecordings.add(fp); }
     }
   }
 }
