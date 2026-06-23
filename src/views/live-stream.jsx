@@ -22,6 +22,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   const [flash, setFlash] = lsUseState(false);
   const [screenshots, setScreenshots] = lsUseState([]);
   const [endOpen, setEndOpen] = lsUseState(false);
+  const [ingestOpen, setIngestOpen] = lsUseState(false);
   const toast = useToast();
   const chatEnd = lsUseRef(null);
   const videoBoxRef = lsUseRef(null);
@@ -52,6 +53,11 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
     try { return new URL(import.meta.env.VITE_STREAM_URL || origin, origin).origin; }
     catch { return origin; }
   })();
+  // Direct ingest (non-DJI / no app): per-flight RTMP/SRT publish URL + key.
+  const streamHost = (() => { try { return new URL(gatewayBase).hostname; } catch { return "your-stream-host"; } })();
+  const rtmpIngest = (f?.dbId && f?.ingestKey) ? `rtmp://${streamHost}:1935/${f.dbId}?key=${f.ingestKey}` : "";
+  const srtIngest = (f?.dbId && f?.ingestKey) ? `srt://${streamHost}:8890?streamid=publish:${f.dbId}?key=${f.ingestKey}` : "";
+  const copy = (text) => { try { navigator.clipboard?.writeText(text); toast({ kind: "success", title: "Copied", msg: "Paste into your encoder / ground station." }); } catch { toast({ kind: "info", title: "Copy", msg: text }); } };
   const authToken = async () => {
     const { data } = await supabase.auth.getSession();
     return data?.session?.access_token || "";
@@ -224,6 +230,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
           <button className="btn" onClick={() => { navigator.clipboard?.writeText(streamLink); toast({ kind: "success", title: "Link copied", msg: streamLink }); }}>
             <Icon name="paperclip" size={14}/> Copy URL
           </button>
+          <button className="btn" onClick={() => setIngestOpen(true)} title="Stream from a non-DJI drone / encoder without the app"><Icon name="link" size={14}/> Direct ingest</button>
           <button className="btn btn-danger" onClick={() => setEndOpen(true)} disabled={!canEndFlight} title={canEndFlight ? "End the mission" : "Your role can't end missions"}><Icon name="stop" size={14}/> End flight</button>
         </div>
       </div>
@@ -332,6 +339,33 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
           </div>
         </div>
       </div>
+
+      {ingestOpen && (
+        <Modal open onClose={() => setIngestOpen(false)} title="Direct drone ingest" subtitle="Stream a non-DJI drone / any encoder into this mission — no app needed" icon="link"
+          footer={<button className="btn btn-primary" onClick={() => setIngestOpen(false)}>Done</button>}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14, fontSize: 13 }}>
+            <div className="muted">While this mission is live, point any RTMP/SRT-capable encoder — OBS, ffmpeg, a hardware encoder, or a drone ground station — at the URL below. The feed shows up here and on the watch link exactly like the companion app.</div>
+            <div className="field">
+              <label className="field-label">RTMP URL</label>
+              <div className="row" style={{ gap: 6 }}>
+                <input className="input mono" readOnly value={rtmpIngest} onFocus={e => e.target.select()} style={{ flex: 1, fontSize: 11.5 }}/>
+                <button className="btn" onClick={() => copy(rtmpIngest)}><Icon name="paperclip" size={13}/></button>
+              </div>
+            </div>
+            <div className="field">
+              <label className="field-label">SRT URL (lower latency)</label>
+              <div className="row" style={{ gap: 6 }}>
+                <input className="input mono" readOnly value={srtIngest} onFocus={e => e.target.select()} style={{ flex: 1, fontSize: 11.5 }}/>
+                <button className="btn" onClick={() => copy(srtIngest)}><Icon name="paperclip" size={13}/></button>
+              </div>
+            </div>
+            <div className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>
+              <b>OBS-style split</b> — Server: <span className="mono">rtmp://{streamHost}:1935</span> · Stream key: <span className="mono">{f?.dbId}?key={f?.ingestKey}</span>
+            </div>
+            <div className="muted" style={{ fontSize: 11.5 }}>Keep this key private — it authorizes publishing to this mission. Each mission has its own key.</div>
+          </div>
+        </Modal>
+      )}
 
       <Modal open={endOpen} onClose={() => setEndOpen(false)} title="End flight & generate summary" icon="check"
         footer={

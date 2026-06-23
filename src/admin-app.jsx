@@ -723,6 +723,8 @@ function SectorEditModal({ preset, onClose, onSave }) {
 
 function IntegrationsView() {
   const toast = useToast();
+  const streamHost = (() => { try { return new URL(import.meta.env.VITE_STREAM_URL || location.origin, location.origin).hostname; } catch { return "your-stream-host"; } })();
+  const copy = (t) => { try { navigator.clipboard?.writeText(t); toast({ kind: "success", title: "Copied", msg: t }); } catch {} };
   const [list, setList] = React.useState([
     { n: "Slack", d: "Push notifications & livestream alerts to channels", st: "connected", icon: "link" },
     { n: "Microsoft Teams", d: "Mirror Slack rules to Teams", st: "connected", icon: "link" },
@@ -749,6 +751,40 @@ function IntegrationsView() {
 
   return (
     <>
+      {/* Real, first-party ingest API for any drone / encoder */}
+      <div className="card" style={{ marginBottom: "var(--density-gap)", borderColor: "color-mix(in oklab, var(--accent) 30%, var(--border))" }}>
+        <div className="card-head" style={{ gap: 12 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 10, background: "color-mix(in oklab, var(--accent) 12%, transparent)", color: "var(--accent)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+            <Icon name="drone" size={18}/>
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="card-title">Direct drone ingest API</div>
+            <div className="muted" style={{ fontSize: 12 }}>Stream any drone into Pilot Ops — DJI, Autel, custom ground stations or fixed-wing — without the Android companion app.</div>
+          </div>
+          <span className="badge badge-success" style={{ marginLeft: "auto", flexShrink: 0 }}><span className="dot"/> Live</span>
+        </div>
+        <div className="card-body" style={{ display: "grid", gap: 12 }}>
+          <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+            Any RTMP- or SRT-capable encoder (OBS, ffmpeg, a hardware encoder, or a drone ground station) can publish a live mission feed. Start a mission in Pilot Ops, open <b>Live stream → Direct ingest</b> to copy that mission's unique URL + key, then point your encoder at it. The feed appears in the livestream and on the public watch link — authenticated and recorded like an app cast.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
+            {[
+              ["RTMP ingest", `rtmp://${streamHost}:1935/<flightId>?key=<ingestKey>`],
+              ["SRT ingest (lower latency)", `srt://${streamHost}:8890?streamid=publish:<flightId>?key=<ingestKey>`],
+            ].map(([label, url]) => (
+              <div key={label} className="field">
+                <label className="field-label">{label}</label>
+                <div className="row" style={{ gap: 6 }}>
+                  <input className="input mono" readOnly value={url} onFocus={e => e.target.select()} style={{ flex: 1, fontSize: 11.5 }}/>
+                  <button className="btn" onClick={() => copy(url)}><Icon name="paperclip" size={13}/></button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="muted" style={{ fontSize: 11.5 }}>Per-mission keys (no shared secret) — each flight has its own <span className="mono">ingestKey</span>, shown to its crew in the live view. Sub-second WebRTC/WHEP playback in the browser.</div>
+        </div>
+      </div>
+
       <div className="grid-2">
         {list.map(c => (
           <div key={c.n} className="card">

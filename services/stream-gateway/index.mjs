@@ -163,6 +163,16 @@ app.post("/auth", async (req, res) => {
       const v = await validatePublisher(token, path);
       if (v.ok) { await flipLive(path); log("auth allow publish (token)", { path }); return res.sendStatus(200); }
     }
+    // Path A2: a per-flight ingest key — direct RTMP/SRT from a non-app encoder
+    // or drone ground station (OBS, ffmpeg, hardware encoder). Any publisher that
+    // can put ?key=<ingest_key> in the URL authenticates this way.
+    const ikey = keyFromQuery(query);
+    if (ikey) {
+      const { data: flight } = await admin.from("flights").select("status, ingest_key").eq("id", path).maybeSingle();
+      if (flight && flight.ingest_key && flight.ingest_key === ikey && flight.status === "live") {
+        await flipLive(path); log("auth allow publish (ingest key)", { path }); return res.sendStatus(200);
+      }
+    }
     // Path B: a recent /grant for this flight (the normal app path).
     const g = grants.get(path);
     if (g && Date.now() - g < GRANT_TTL) {

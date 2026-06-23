@@ -73,7 +73,7 @@ function mapFlight(f, liveSet) {
     speed: 0, signal: 90, lat: f.cur_lat ?? f.launch_lat, lng: f.cur_lng ?? f.launch_lng,
     emergency: f.emergency, emergencyType: f.emergency_type, justification: f.justification,
     streamStatus: f.stream_status || "offline", streamStartedAt: f.stream_started_at || null,
-    shareKey: f.share_key || null,
+    shareKey: f.share_key || null, ingestKey: f.ingest_key || null,
   };
 }
 
