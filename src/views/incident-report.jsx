@@ -58,6 +58,20 @@ function IncidentReportView({ basemap, setBasemap }) {
     return paths;
   }
 
+  // Parse "lat, lng" (with or without ° symbols) typed into the Location field
+  // so the map pin follows manual entry, not just map clicks.
+  const parseCoords = (text) => {
+    const nums = (String(text).match(/-?\d+(?:\.\d+)?/g) || []).map(Number);
+    if (nums.length >= 2 && nums[0] >= -90 && nums[0] <= 90 && nums[1] >= -180 && nums[1] <= 180) {
+      return { lat: nums[0], lng: nums[1] };
+    }
+    return null;
+  };
+  const onLocation = (v) => {
+    const c = parseCoords(v);
+    setForm(f => ({ ...f, location: v, ...(c ? { lat: c.lat, lng: c.lng } : {}) }));
+  };
+
   const canLog = !window.hasPerm || window.hasPerm("incident.create");
   async function persist(status) {
     if (!canLog) { toast({ kind: "warn", title: "No permission", msg: "Your role can't log incidents." }); return; }
@@ -140,8 +154,8 @@ function IncidentReportView({ basemap, setBasemap }) {
               </div>
               <div className="field">
                 <label className="field-label">Location <span className="req">*</span></label>
-                <input className="input mono" value={form.location} onChange={e => update("location", e.target.value)}/>
-                <div className="field-hint">Drop the pin on the map →</div>
+                <input className="input mono" value={form.location} onChange={e => onLocation(e.target.value)} placeholder="e.g. 6.43250, 3.42150"/>
+                <div className="field-hint">Type coordinates or drop the pin on the map →</div>
               </div>
               <div className="field">
                 <label className="field-label">Related flight</label>
