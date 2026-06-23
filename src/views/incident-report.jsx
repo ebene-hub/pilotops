@@ -13,7 +13,6 @@ function IncidentReportView({ basemap, setBasemap }) {
   const [form, setForm] = irUseState({
     type: incidentTypes[0] || "Anomaly", severity: "medium", title: "", desc: "",
     location: "", flight: "", lat: null, lng: null,
-    showOn: { map: true, bar: true, pie: true, kpi: true, timeline: false }
   });
   const [busy, setBusy] = irUseState(false);
   const toast = useToast();
@@ -41,7 +40,7 @@ function IncidentReportView({ basemap, setBasemap }) {
       place: form.location || form.title, lat: form.lat, lng: form.lng,
       reporter_id: window.__poUser?.id || null, status: "open",
       description: form.title + (form.desc ? " — " + form.desc : ""),
-      visualize: { ...form.showOn, links },
+      visualize: { links },
     });
     setBusy(false);
     if (error) { toast({ kind: "warn", title: "Could not log incident", msg: error.message }); return; }
@@ -186,28 +185,6 @@ function IncidentReportView({ basemap, setBasemap }) {
               <div className="card-title">Pin location</div>
             </div>
             <MapCanvas basemap={basemap} pins={[{ lat: form.lat, lng: form.lng, x: 48, y: 38, color: "var(--danger)", label: form.title.slice(0, 18) || "Incident", size: 7 }]} height={240} showLegend={false}/>
-          </div>
-
-          <div className="card">
-            <div className="card-head"><div className="card-title">Visualize on dashboard</div></div>
-            <div style={{ padding: 8 }}>
-              {[
-                { k: "map", l: "Hotspot map", desc: "Add as cluster point" },
-                { k: "bar", l: "Bar chart", desc: "By incident type" },
-                { k: "pie", l: "Donut chart", desc: "By severity" },
-                { k: "kpi", l: "KPI tiles", desc: "Increment counters" },
-                { k: "timeline", l: "Time-series", desc: "Append to today" }
-              ].map(o => (
-                <div key={o.k} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 10px", borderRadius: 8, cursor: "pointer" }}
-                     onClick={() => update("showOn", { ...form.showOn, [o.k]: !form.showOn[o.k] })}>
-                  <div className={"switch " + (form.showOn[o.k] ? "on" : "")}/>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500 }}>{o.l}</div>
-                    <div className="muted" style={{ fontSize: 11 }}>{o.desc}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
           </div>
 
           <div className="card">
