@@ -44,10 +44,10 @@ function ReportsArchiveView() {
 
       {/* Aggregate stats */}
       <div className="grid-4" style={{ marginBottom: "var(--density-gap)" }}>
-        <KpiTile label="Reports MTD"    value="14"  unit="reports" delta="+3" trend="up" spark={[8,10,11,12,13,14,14]}/>
-        <KpiTile label="Avg auth time"  value="22"  unit="min" delta="-4m" trend="down" spark={[28,26,25,24,23,22,22]} color="var(--success)"/>
-        <KpiTile label="Incidents covered" value="48" unit="cases" delta="+12" trend="up" spark={[20,25,30,35,40,44,48]}/>
-        <KpiTile label="Distribution"   value="184" unit="recipients" delta="+18%" trend="up" spark={[120,135,150,160,170,178,184]} color="#7c3aed"/>
+        <KpiTile label="Reports"          value={REPORTS_ARCHIVE.length} unit="reports" delta={`${REPORTS_ARCHIVE.filter(r => r.status === "published").length} published`} trend="up" spark={Array(7).fill(REPORTS_ARCHIVE.length)}/>
+        <KpiTile label="Published"        value={REPORTS_ARCHIVE.filter(r => r.status === "published").length} unit="reports" trend="up" spark={Array(7).fill(REPORTS_ARCHIVE.filter(r => r.status === "published").length)} color="var(--success)"/>
+        <KpiTile label="Flights archived" value={(window.RECENT_FLIGHTS || []).length} unit="flights" trend="up" spark={Array(7).fill((window.RECENT_FLIGHTS || []).length)}/>
+        <KpiTile label="Incidents covered" value={REPORTS_ARCHIVE.reduce((s, r) => s + (r.incidents || 0), 0)} unit="cases" trend="up" spark={Array(7).fill(REPORTS_ARCHIVE.reduce((s, r) => s + (r.incidents || 0), 0))} color="#7c3aed"/>
       </div>
 
       <div className="card" style={{ marginBottom: "var(--density-gap)" }}>

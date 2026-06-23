@@ -148,9 +148,18 @@ export async function bootstrap() {
     date: dateLabel(r.created_at), flights: r.flights, incidents: r.incidents, status: r.status, type: r.type,
   }));
 
+  // Readable flight code (FL-####) + pilot name lookups for cross-referencing.
+  const flightCodeById = {};
+  const flightPilotById = {};
+  flightsRaw.forEach((f) => { flightCodeById[f.id] = f.code || (f.id ? f.id.slice(0, 8) : "—"); flightPilotById[f.id] = f.pilot?.full_name || null; });
+  const pilotNameById = {};
+  profilesRaw.forEach((p) => { pilotNameById[p.id] = p.full_name; });
+
   const media = mediaRaw.map((m) => ({
-    id: m.id, name: m.name, type: m.type, size: m.size, dur: m.duration,
-    pilot: m.pilot_id, flight: m.flight_id, area: m.area,
+    id: m.id, shortId: m.id ? m.id.slice(0, 8).toUpperCase() : "", name: m.name, type: m.type, size: m.size, dur: m.duration,
+    pilot: pilotNameById[m.pilot_id] || flightPilotById[m.flight_id] || "—",
+    flight: m.flight_id ? (flightCodeById[m.flight_id] || "—") : "—", flightId: m.flight_id,
+    area: m.area,
     date: dateLabel(m.created_at), createdAt: m.created_at, tags: m.tags || [], starred: m.starred, path: m.storage_path,
   }));
 

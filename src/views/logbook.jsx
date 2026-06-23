@@ -24,39 +24,63 @@ function LogbookView({ accent }) {
     return true;
   }), [entries, search]);
 
-  const totals = lbUseMemo(() => ({
-    hours: entries.reduce((s, e) => s + e.duration, 0) / 60,
-    flights: entries.length,
-    night: entries.reduce((s, e) => s + e.night, 0) / 60,
-    bvlos: entries.reduce((s, e) => s + e.bvlos, 0) / 60,
-    ldgs: entries.reduce((s, e) => s + e.ldgs, 0),
-  }), [entries]);
+  const totals = lbUseMemo(() => {
+    const monthCut = new Date(); monthCut.setDate(1); monthCut.setHours(0, 0, 0, 0);
+    const cut90 = Date.now() - 90 * 86400000;
+    const inMonth = entries.filter(e => e.date && new Date(e.date) >= monthCut);
+    const in90 = entries.filter(e => e.date && new Date(e.date).getTime() >= cut90);
+    return {
+      hours: entries.reduce((s, e) => s + e.duration, 0) / 60,
+      flights: entries.length,
+      night: entries.reduce((s, e) => s + e.night, 0) / 60,
+      bvlos: entries.reduce((s, e) => s + e.bvlos, 0) / 60,
+      ldgs: entries.reduce((s, e) => s + e.ldgs, 0),
+      monthHours: inMonth.reduce((s, e) => s + e.duration, 0) / 60,
+      monthFlights: inMonth.length,
+      night90: in90.reduce((s, e) => s + e.night, 0) / 60,
+      night90Flights: in90.filter(e => e.night > 0).length,
+    };
+  }, [entries]);
 
-  // Last 12 months stacked column data (synthetic)
+  // Last 12 months — real hours by month.
   const monthly = lbUseMemo(() => {
-    const months = ["Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun"];
-    return months.map((m, i) => ({
-      label: m,
-      day: 10 + Math.round(Math.sin(i * 0.6) * 8 + i * 1.4),
-      night: 2 + Math.round(Math.cos(i * 0.5) * 3 + (i > 7 ? 2 : 0)),
-    }));
-  }, []);
+    const N = 12, now = new Date();
+    const buckets = Array.from({ length: N }, (_, k) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (N - 1 - k), 1);
+      return { y: d.getFullYear(), m: d.getMonth(), label: d.toLocaleDateString(undefined, { month: "short" }), day: 0, night: 0 };
+    });
+    entries.forEach(e => {
+      if (!e.date) return;
+      const d = new Date(e.date);
+      const b = buckets.find(x => x.y === d.getFullYear() && x.m === d.getMonth());
+      if (b) { b.day += (e.day || 0) / 60; b.night += (e.night || 0) / 60; }
+    });
+    return buckets.map(b => ({ label: b.label, day: Math.round(b.day * 10) / 10, night: Math.round(b.night * 10) / 10 }));
+  }, [entries]);
 
-  const maxMonth = Math.max(...monthly.map(m => m.day + m.night));
+  const maxMonth = Math.max(1, ...monthly.map(m => m.day + m.night));
 
-  // Mini calendar heatmap
+  // Mini calendar heatmap — last 91 days, real.
   const calendar = lbUseMemo(() => {
     const days = [];
+    const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - 90);
     for (let i = 0; i < 91; i++) {
-      const date = new Date(2026, 2, 5 + i);
-      const minutes = entries.filter(e => e.date === date.toISOString().slice(0, 10)).reduce((s, e) => s + e.duration, 0);
+      const date = new Date(start); date.setDate(start.getDate() + i);
+      const key = date.toISOString().slice(0, 10);
+      const minutes = entries.filter(e => e.date && String(e.date).slice(0, 10) === key).reduce((s, e) => s + e.duration, 0);
       days.push({ date, minutes });
     }
     return days;
   }, [entries]);
 
   function exportCSV() {
-    toast({ kind: "success", title: "Exported", msg: `logbook_${me.id}_${new Date().toISOString().slice(0,10)}.csv` });
+    const rows = [["Date", "Aircraft", "Model", "Area", "Role", "Duration (min)", "Night", "BVLOS"]];
+    for (const e of filtered) rows.push([e.date, e.aircraft, e.model, e.area, e.role, e.duration, e.night > 0 ? "yes" : "no", e.bvlos > 0 ? "yes" : "no"]);
+    const csv = rows.map(r => r.map(c => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a"); a.href = url; a.download = `logbook-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    toast({ kind: "success", title: "Exported", msg: `${filtered.length} entries → CSV` });
   }
 
   async function addEntry(e) {
@@ -90,10 +114,10 @@ function LogbookView({ accent }) {
 
       {/* KPI strip */}
       <div className="grid-4" style={{ marginBottom: "var(--density-gap)" }}>
-        <KpiTile label="Total flight hours" value={totals.hours.toFixed(1)} unit="hr" delta="+8.4 hr / mo" trend="up" spark={[280,295,310,325,348,372,398,412]}/>
-        <KpiTile label="This month"        value="18.4" unit="hr" delta="6 flights" trend="up" spark={[2,5,8,11,13,15,17,18.4]} color="var(--success)"/>
-        <KpiTile label="Night ops (90d)"   value="3.2" unit="hr" delta="3 flights" trend="up" spark={[0,0,0.5,1,1.5,2.4,3,3.2]} color="#1e3a8a"/>
-        <KpiTile label="BVLOS hours"        value="44.0" unit="hr" delta="+1.1 hr" trend="up" spark={[18,22,26,30,34,38,42,44]} color="#7c3aed"/>
+        <KpiTile label="Total flight hours" value={totals.hours.toFixed(1)} unit="hr" delta={`${totals.flights} flights`} trend="up" spark={Array(8).fill(totals.hours)}/>
+        <KpiTile label="This month"        value={totals.monthHours.toFixed(1)} unit="hr" delta={`${totals.monthFlights} flights`} trend="up" spark={Array(8).fill(totals.monthHours)} color="var(--success)"/>
+        <KpiTile label="Night ops (90d)"   value={totals.night90.toFixed(1)} unit="hr" delta={`${totals.night90Flights} flights`} trend="up" spark={Array(8).fill(totals.night90)} color="#1e3a8a"/>
+        <KpiTile label="BVLOS hours"        value={totals.bvlos.toFixed(1)} unit="hr" trend="up" spark={Array(8).fill(totals.bvlos)} color="#7c3aed"/>
       </div>
 
       {/* Currency / compliance */}

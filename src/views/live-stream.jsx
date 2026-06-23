@@ -6,9 +6,14 @@ import { refresh } from "../store.jsx";
 const { useState: lsUseState, useEffect: lsUseEffect, useRef: lsUseRef } = React;
 
 function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
-  // Prefer the full, fresh flight from the store (has shareKey/streamStatus and
-  // the correct dbId) over the partial object passed from Start mission.
-  const f = (window.ACTIVE_FLIGHTS || []).find(x => x.dbId && x.dbId === flight?.dbId) || flight || ACTIVE_FLIGHTS[0];
+  // Only show a flight that's actually live: the full store flight if it's still
+  // active, else the passed flight if live, else the first active flight — else
+  // nothing (empty state). Avoids rendering a stale/completed flight as "live".
+  const active = window.ACTIVE_FLIGHTS || [];
+  const f = active.find(x => x.dbId && x.dbId === flight?.dbId)
+    || (flight && flight.status === "live" ? flight : null)
+    || active[0]
+    || null;
   const [duration, setDuration] = lsUseState(0);
   const [chat, setChat] = lsUseState([]);
   const [pos, setPos] = lsUseState(null);
@@ -119,12 +124,17 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   };
 
   if (!f) return (
-    <div className="main-content" style={{ display: "grid", placeItems: "center", minHeight: 480 }}>
-      <div className="card" style={{ maxWidth: 420, textAlign: "center" }}>
-        <div className="card-body" style={{ padding: 40 }}>
-          <Icon name="video" size={32} stroke="var(--text-3)"/>
-          <h2 style={{ fontSize: 18, marginTop: 12 }}>No active flight</h2>
-          <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>Start a mission to open a live stream.</div>
+    <div className="main-content">
+      <div className="page-head"><div><h1 className="page-title">Live stream</h1><div className="page-sub">Real-time mission feed</div></div></div>
+      <div style={{ display: "grid", placeItems: "center", border: "1px dashed var(--border)", borderRadius: 12, minHeight: 460, background: "var(--bg-subtle)" }}>
+        <div style={{ textAlign: "center", padding: 40 }}>
+          <div style={{ width: 60, height: 60, borderRadius: "50%", background: "var(--bg-muted)", display: "grid", placeItems: "center", margin: "0 auto" }}>
+            <Icon name="video" size={26} stroke="var(--text-4)"/>
+          </div>
+          <div style={{ marginTop: 14, fontSize: 16, fontWeight: 600, color: "var(--text-2)" }}>No active livestream</div>
+          <div className="muted" style={{ fontSize: 13, marginTop: 6, maxWidth: 360 }}>
+            Start a mission and have the pilot cast from the GGIS UAV Companion app — the live feed will appear here.
+          </div>
         </div>
       </div>
     </div>

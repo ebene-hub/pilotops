@@ -307,7 +307,7 @@ function MediaGalleryView({ accent }) {
           {showPilotFilter && (
             <select className="select" value={pilotFilter} onChange={e => setPilotFilter(e.target.value)} style={{ height: 34, maxWidth: 200 }}>
               <option value="all">All pilots</option>
-              {pilots.map(p => <option key={p} value={p}>{(window.TEAM_ROSTER || []).find(m => m.id === p)?.name || p}</option>)}
+              {pilots.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
           )}
           <button className={"btn" + (showPilotFilter ? " btn-primary" : "")} onClick={() => { setShowPilotFilter(s => !s); if (showPilotFilter) setPilotFilter("all"); }}><Icon name="filter" size={14}/> Filter</button>
@@ -565,7 +565,7 @@ function MediaGalleryView({ accent }) {
               </div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <DetailRow label="File ID" value={selected.id} mono/>
+              <DetailRow label="File ID" value={selected.shortId || selected.id} mono/>
               <DetailRow label="Type" value={<span className="badge" style={{ background: `color-mix(in oklab, ${(TYPE_META[selected.type]||TYPE_META.photo).color} 10%, transparent)`, color: (TYPE_META[selected.type]||TYPE_META.photo).color, borderColor: `color-mix(in oklab, ${(TYPE_META[selected.type]||TYPE_META.photo).color} 30%, transparent)` }}><Icon name={(TYPE_META[selected.type]||TYPE_META.photo).icon} size={11}/> {(TYPE_META[selected.type]||TYPE_META.photo).label}</span>}/>
               <DetailRow label="Size" value={formatBytes(selected.size)} mono/>
               {selected.dur && <DetailRow label="Duration" value={selected.dur} mono/>}
