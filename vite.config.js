@@ -26,6 +26,7 @@ export default defineConfig({
         admin: resolve(__dirname, "admin.html"),
         adminLogin: resolve(__dirname, "admin-login.html"),
         adminSignup: resolve(__dirname, "admin-signup.html"),
+        watch: resolve(__dirname, "watch.html"),
       },
     },
   },

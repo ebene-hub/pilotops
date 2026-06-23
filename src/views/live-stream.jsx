@@ -20,11 +20,15 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   const chatEnd = lsUseRef(null);
   const videoBoxRef = lsUseRef(null);
 
-  const streamLink = (typeof window !== "undefined" ? window.location.origin : "") + "/";
+  // Public watch link — no login; shows only the livestream + chat.
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const streamLink = (f.dbId && f.shareKey)
+    ? `${origin}/watch.html?f=${f.dbId}&k=${f.shareKey}`
+    : `${origin}/`;
   const shareStream = async () => {
     const payload = { title: `Pilot Ops — ${f.id} live`, text: `Live drone feed: ${f.area}`, url: streamLink };
     try { if (navigator.share) { await navigator.share(payload); return; } } catch {}
-    try { await navigator.clipboard.writeText(streamLink); toast({ kind: "success", title: "Link copied", msg: streamLink }); }
+    try { await navigator.clipboard.writeText(streamLink); toast({ kind: "success", title: "Public link copied", msg: "Anyone with this link can watch — no login." }); }
     catch { toast({ kind: "info", title: "Share link", msg: streamLink }); }
   };
   const toggleFullscreen = () => {
@@ -89,11 +93,25 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   };
 
   const screenshot = () => {
+    const video = videoBoxRef.current?.querySelector("video");
+    if (!video || !video.videoWidth) { toast({ kind: "warn", title: "No live feed", msg: "Start casting before capturing a frame." }); return; }
     setFlash(true);
     setTimeout(() => setFlash(false), 220);
-    const ss = { id: "SS-" + Math.random().toString(36).slice(2, 6).toUpperCase(), time: fmt(duration), thumb: Math.floor(Math.random() * 360) };
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0);
+    const ss = { id: "SS-" + Math.random().toString(36).slice(2, 6).toUpperCase(), time: fmt(duration), thumbUrl: canvas.toDataURL("image/jpeg", 0.5) };
     setScreenshots(s => [ss, ...s].slice(0, 6));
-    toast({ kind: "success", title: "Screenshot saved", msg: `${ss.id} attached to ${f.id} case file.` });
+    // Save the full-res frame to storage + media gallery.
+    canvas.toBlob(async (blob) => {
+      if (!blob || !f?.dbId) return;
+      const name = `${f.id}-${new Date().toISOString().replace(/[:.]/g, "-")}.jpg`;
+      const path = `flights/${f.dbId}/screenshots/${name}`;
+      const { error: upErr } = await supabase.storage.from("media").upload(path, blob, { contentType: "image/jpeg", upsert: true });
+      if (upErr) { toast({ kind: "warn", title: "Screenshot not saved", msg: upErr.message }); return; }
+      await supabase.from("media").insert({ storage_path: path, name, type: "photo", flight_id: f.dbId, pilot_id: window.__poUser?.id || null, area: f.area, size: blob.size });
+      toast({ kind: "success", title: "Screenshot saved", msg: `Attached to ${f.id} in Media gallery.` });
+    }, "image/jpeg", 0.9);
   };
 
   if (!f) return (
@@ -180,7 +198,8 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
               {screenshots.length === 0 && <div className="muted" style={{ fontSize: 12.5, padding: 8, textAlign: "center" }}>No screenshots yet — tap <strong>Screenshot</strong> on the feed to capture frames.</div>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
                 {screenshots.map(s => (
-                  <div key={s.id} style={{ borderRadius: 6, overflow: "hidden", border: "1px solid var(--border)", position: "relative", aspectRatio: "16/10", background: `linear-gradient(135deg, hsl(${s.thumb} 30% 25%), hsl(${(s.thumb + 60) % 360} 40% 15%))` }}>
+                  <div key={s.id} style={{ borderRadius: 6, overflow: "hidden", border: "1px solid var(--border)", position: "relative", aspectRatio: "16/10", background: "#000" }}>
+                    {s.thumbUrl && <img src={s.thumbUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }}/>}
                     <div style={{ position: "absolute", bottom: 4, left: 4, fontSize: 9, color: "white", fontFamily: "var(--font-mono)", background: "rgba(0,0,0,0.4)", padding: "1px 4px", borderRadius: 3 }}>{s.time}</div>
                   </div>
                 ))}

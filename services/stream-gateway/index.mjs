@@ -38,6 +38,9 @@ app.use(express.urlencoded({ extended: false }));
 const tokenFromQuery = (q) => {
   try { return new URLSearchParams(q || "").get("token") || ""; } catch { return ""; }
 };
+const keyFromQuery = (q) => {
+  try { return new URLSearchParams(q || "").get("key") || ""; } catch { return ""; }
+};
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const flipLive = (id) => admin.from("flights").update({ stream_status: "live", stream_started_at: new Date().toISOString() }).eq("id", id);
 
@@ -102,9 +105,15 @@ app.post("/auth", async (req, res) => {
     return res.sendStatus(401);
   }
 
-  // read/playback (WHEP/HLS): HTTP keeps the query, so require a valid token in
-  // the same org as the flight.
-  if (!token) { log("auth deny read: no token", { path }); return res.sendStatus(401); }
+  // read/playback (WHEP/HLS). Public viewer: a valid share_key for this flight
+  // allows a tokenless read.
+  const key = keyFromQuery(query);
+  if (key) {
+    const { data: f } = await admin.from("flights").select("share_key").eq("id", path).maybeSingle();
+    if (f && f.share_key && f.share_key === key) return res.sendStatus(200);
+  }
+  // Otherwise require a valid token in the same org as the flight.
+  if (!token) { log("auth deny read: no token/key", { path }); return res.sendStatus(401); }
   const { data: u } = await admin.auth.getUser(token);
   if (!u?.user) { log("auth deny read: bad token", { path }); return res.sendStatus(401); }
   const [{ data: flight }, { data: profile }] = await Promise.all([

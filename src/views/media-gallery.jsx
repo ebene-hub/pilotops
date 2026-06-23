@@ -266,10 +266,18 @@ function MediaGalleryView({ accent }) {
     setMedia(prev => prev.map(x => x.id === m.id ? { ...x, starred: !x.starred } : x));
   }
 
-  function removeItem(m) {
-    setMedia(prev => prev.filter(x => x.id !== m.id));
+  async function removeItem(m) {
     if (selected?.id === m.id) setSelected(null);
-    toast({ kind: "info", title: "File deleted", msg: m.name });
+    setMedia(prev => prev.filter(x => x.id !== m.id));
+    const sb = window.__supabase;
+    const { error } = await sb.from("media").delete().eq("id", m.id);
+    if (error) {
+      setMedia(prev => [m, ...prev]); // revert — it wasn't deleted
+      toast({ kind: "warn", title: "Delete failed", msg: error.message });
+      return;
+    }
+    if (m.path) sb.storage.from("media").remove([m.path]).catch(() => {});
+    toast({ kind: "success", title: "File deleted", msg: m.name });
   }
 
   return (
@@ -520,8 +528,11 @@ function MediaGalleryView({ accent }) {
                    <button className="btn btn-danger" onClick={() => removeItem(selected)}><Icon name="trash" size={14}/> Delete</button>
                    <button className="btn btn-primary" onClick={async () => {
                      if (!selected.path) return toast({ kind: "warn", title: "No file", msg: "Nothing to download." });
-                     const { data } = await window.__supabase.storage.from("media").createSignedUrl(selected.path, 3600, { download: selected.name });
-                     if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+                     const { data, error } = await window.__supabase.storage.from("media").createSignedUrl(selected.path, 3600, { download: selected.name });
+                     if (error || !data?.signedUrl) return toast({ kind: "warn", title: "Download failed", msg: error?.message || "No URL" });
+                     const a = document.createElement("a");
+                     a.href = data.signedUrl; a.download = selected.name || "download";
+                     document.body.appendChild(a); a.click(); a.remove();
                    }}><Icon name="download" size={14}/> Download</button>
                  </>
                }>
