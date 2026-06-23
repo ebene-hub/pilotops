@@ -79,15 +79,22 @@ object Supabase {
     }
 
     /** Pre-authorise a cast: the gateway records a short-lived publish grant for
-     *  this flight so the (token-less) RTMP push that follows is allowed. */
-    fun grantStream(token: String, flightId: String, grantUrl: String): Result<Boolean> = runCatching {
+     *  this flight so the (token-less) RTMP push that follows is allowed.
+     *  Succeeds (Result.success) when authorised; on denial fails with the
+     *  gateway's reason (e.g. "not live", "cross-org", "not crew") as the message. */
+    fun grantStream(token: String, flightId: String, grantUrl: String): Result<Unit> = runCatching {
         val body = JSONObject().put("flightId", flightId).put("token", token)
         val req = Request.Builder()
             .url(grantUrl)
             .header("Content-Type", "application/json")
             .post(body.toString().toRequestBody(JSON))
             .build()
-        http.newCall(req).execute().use { res -> res.isSuccessful }
+        http.newCall(req).execute().use { res ->
+            if (res.isSuccessful) return@runCatching
+            val text = res.body?.string().orEmpty()
+            val reason = runCatching { JSONObject(text).optString("reason") }.getOrNull()?.ifEmpty { null }
+            error(reason ?: "denied (HTTP ${res.code})")
+        }
     }
 
     /** Exchange a pairing code (shown in Pilot Ops) for the bound flight. */

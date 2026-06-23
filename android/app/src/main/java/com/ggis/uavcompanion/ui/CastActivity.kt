@@ -36,14 +36,17 @@ class CastActivity : AppCompatActivity() {
             setStatus("Authorizing cast…")
             thread {
                 // Authorise the publish over HTTPS first (RTMP can't carry the token).
-                val ok = Supabase.grantStream(token, flightId, StreamConfig.grantUrl).getOrDefault(false)
+                val grant = Supabase.grantStream(token, flightId, StreamConfig.grantUrl)
                 main.post {
-                    if (ok) {
-                        ScreenCastService.start(this, res.resultCode, data, StreamConfig.ingestUrl(flightId), token, flightId)
-                        casting = true; render()
-                    } else {
-                        setStatus("Couldn't authorize the cast — check your sign-in and that the mission is live, then retry.")
-                    }
+                    grant.fold(
+                        onSuccess = {
+                            ScreenCastService.start(this, res.resultCode, data, StreamConfig.ingestUrl(flightId), token, flightId)
+                            casting = true; render()
+                        },
+                        onFailure = {
+                            setStatus("Couldn't authorize the cast — ${it.message}. Make sure the mission is live in Pilot Ops and you're signed in as its pilot, then retry.")
+                        }
+                    )
                 }
             }
         } else {

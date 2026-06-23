@@ -77,7 +77,7 @@ app.post("/grant", async (req, res) => {
   const flightId = (req.body?.flightId || "").trim();
   const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   const v = await validatePublisher(token, flightId);
-  if (!v.ok) { log("grant deny", { flightId, reason: v.reason }); return res.sendStatus(401); }
+  if (!v.ok) { log("grant deny", { flightId, reason: v.reason }); return res.status(401).json({ ok: false, reason: v.reason }); }
   grants.set(flightId, Date.now());
   log("grant ok", { flightId });
   res.sendStatus(200);
