@@ -1,5 +1,6 @@
 import React from "react";
 import { getCurrentPosition } from "../api/geo.js";
+import { refresh } from "../store.jsx";
 // Pilot Ops — Flight Hub view: pilot dispatch, active flights, log new flight modal
 const { useState: fhUseState, useMemo: fhUseMemo, useEffect: fhUseEffect } = React;
 
@@ -7,6 +8,13 @@ function FlightHubView({ basemap, setBasemap, onStartFlight, onOpenStream, onEme
   const [emergencyOpen, setEmergencyOpen] = fhUseState(false);
   const [myLoc, setMyLoc] = fhUseState(null);
   const [mapExpanded, setMapExpanded] = fhUseState(false);
+  const [syncing, setSyncing] = fhUseState(false);
+  const [showFilter, setShowFilter] = fhUseState(false);
+  const [query, setQuery] = fhUseState("");
+  const toast = useToast();
+
+  const sync = async () => { setSyncing(true); try { await refresh(); toast({ kind: "success", title: "Synced", msg: "Latest flights loaded." }); } catch (e) { toast({ kind: "warn", title: "Sync failed", msg: e.message }); } setSyncing(false); };
+  const matchQ = (s) => !query || String(s).toLowerCase().includes(query.toLowerCase());
 
   // Request the operator's real device location and show it on the map.
   fhUseEffect(() => {
@@ -48,8 +56,11 @@ function FlightHubView({ basemap, setBasemap, onStartFlight, onOpenStream, onEme
           <div className="page-sub">{ACTIVE_FLIGHTS.length} active flights · {PILOTS.filter(p => p.status === "in-flight").length} pilots aloft · {STATIONS.length} stations online</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="refresh" size={14}/> Sync</button>
-          <button className="btn"><Icon name="filter" size={14}/> Filter</button>
+          {showFilter && (
+            <input className="input" autoFocus placeholder="Filter by pilot, area, ID…" value={query} onChange={e => setQuery(e.target.value)} style={{ width: 200, height: 34 }}/>
+          )}
+          <button className="btn" onClick={sync} disabled={syncing}><Icon name="refresh" size={14}/> {syncing ? "Syncing…" : "Sync"}</button>
+          <button className={"btn" + (showFilter ? " btn-primary" : "")} onClick={() => { setShowFilter(s => !s); if (showFilter) setQuery(""); }}><Icon name="filter" size={14}/> Filter</button>
           <button className="btn" disabled={!canFly} onClick={() => setEmergencyOpen(true)} style={{ color: canFly ? "var(--danger)" : undefined, borderColor: canFly ? "color-mix(in oklab, var(--danger) 35%, var(--border))" : undefined }} title={canFly ? "Skip pre-flight for time-critical missions" : "Your role can't start missions"}>
             <Icon name="warn" size={14}/> Emergency launch
           </button>
@@ -84,7 +95,7 @@ function FlightHubView({ basemap, setBasemap, onStartFlight, onOpenStream, onEme
             <button className="btn btn-sm btn-ghost" style={{ marginLeft: "auto" }}>View all</button>
           </div>
           <div style={{ display: "flex", flexDirection: "column" }}>
-            {PILOTS.map(p => (
+            {PILOTS.filter(p => matchQ(`${p.shortId || ""} ${p.name} ${p.role || ""}`)).map(p => (
               <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px var(--density-pad)", borderTop: "1px solid var(--border)" }}>
                 <div className="user-avatar" style={{ background: `linear-gradient(135deg, ${p.color}, color-mix(in oklab, ${p.color} 70%, #000))` }}>{p.initials}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -116,7 +127,7 @@ function FlightHubView({ basemap, setBasemap, onStartFlight, onOpenStream, onEme
               </tr>
             </thead>
             <tbody>
-              {ACTIVE_FLIGHTS.map(f => (
+              {ACTIVE_FLIGHTS.filter(f => matchQ(`${f.id} ${f.area} ${f.pilot?.name || ""}`)).map(f => (
                 <tr key={f.id} className="clickable" onClick={() => onOpenStream(f)}>
                   <td className="mono" style={{ fontWeight: 600 }}>{f.id}</td>
                   <td>

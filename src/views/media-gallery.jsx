@@ -193,6 +193,7 @@ function MediaGalleryView({ accent }) {
   const [q, setQ] = mgUseState("");
   const [typeFilter, setTypeFilter] = mgUseState("all");
   const [pilotFilter, setPilotFilter] = mgUseState("all");
+  const [showPilotFilter, setShowPilotFilter] = mgUseState(false);
   const [view, setView] = mgUseState("grid");          // grid | list
   const [selected, setSelected] = mgUseState(null);
   const [uploadOpen, setUploadOpen] = mgUseState(false);
@@ -219,9 +220,24 @@ function MediaGalleryView({ accent }) {
     return c;
   }, [media]);
 
-  const totalBytes = mgUseMemo(() => media.reduce((s, m) => s + m.size, 0), [media]);
+  const totalBytes = mgUseMemo(() => media.reduce((s, m) => s + (m.size || 0), 0), [media]);
   const quotaBytes = 8 * 1e12; // 8 TB plan
   const usedPct = (totalBytes / quotaBytes) * 100;
+  const uploadedToday = mgUseMemo(() => {
+    const t = new Date(); t.setHours(0, 0, 0, 0);
+    return media.filter(m => m.createdAt && new Date(m.createdAt) >= t).length;
+  }, [media]);
+
+  function exportCsv() {
+    const rows = [["Name", "Type", "Size (bytes)", "Flight", "Area", "Captured", "Starred"]];
+    for (const m of filtered) rows.push([m.name, m.type, m.size, m.flight || "", m.area || "", m.date || "", m.starred ? "yes" : "no"]);
+    const csv = rows.map(r => r.map(c => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `media-export-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    toast({ kind: "success", title: "Exported", msg: `${filtered.length} file(s) → CSV` });
+  }
 
   async function handleFiles(files) {
     if (!files || !files.length) return;
@@ -285,11 +301,17 @@ function MediaGalleryView({ accent }) {
       <div className="page-head">
         <div>
           <h1 className="page-title">Media gallery</h1>
-          <div className="page-sub">{media.length.toLocaleString()} files · {formatBytes(totalBytes)} of {formatBytes(quotaBytes)} used · synced 2 min ago</div>
+          <div className="page-sub">{media.length.toLocaleString()} files · {formatBytes(totalBytes)} of {formatBytes(quotaBytes)} used</div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="filter" size={14}/> Filter</button>
-          <button className="btn"><Icon name="download" size={14}/> Export selection</button>
+          {showPilotFilter && (
+            <select className="select" value={pilotFilter} onChange={e => setPilotFilter(e.target.value)} style={{ height: 34, maxWidth: 200 }}>
+              <option value="all">All pilots</option>
+              {pilots.map(p => <option key={p} value={p}>{(window.TEAM_ROSTER || []).find(m => m.id === p)?.name || p}</option>)}
+            </select>
+          )}
+          <button className={"btn" + (showPilotFilter ? " btn-primary" : "")} onClick={() => { setShowPilotFilter(s => !s); if (showPilotFilter) setPilotFilter("all"); }}><Icon name="filter" size={14}/> Filter</button>
+          <button className="btn" onClick={exportCsv}><Icon name="download" size={14}/> Export ({filtered.length})</button>
           <button className="btn btn-primary" disabled={window.hasPerm && !window.hasPerm("media.upload")} onClick={() => setUploadOpen(true)} title={(window.hasPerm && !window.hasPerm("media.upload")) ? "Your role can't upload media" : ""}><Icon name="upload" size={14}/> Upload media</button>
         </div>
       </div>
@@ -307,9 +329,9 @@ function MediaGalleryView({ accent }) {
           </div>
           <div className="kpi-delta" style={{ color: "var(--text-3)", marginTop: 6 }}>{usedPct.toFixed(1)}% of plan</div>
         </div>
-        <KpiTile label="Total media" value={media.length.toLocaleString()} unit="files" delta="+24 today" trend="up" spark={[1980,1996,2010,2030,2055,2085,media.length]}/>
-        <KpiTile label="Uploaded today" value="24" unit="files" delta="+8 vs yest." trend="up" spark={[10,12,14,18,20,22,24]} color="var(--success)"/>
-        <KpiTile label="Linked to flights" value={`${Math.round((media.filter(m => m.flight).length / media.length) * 100)}`} unit="%" delta="+2%" trend="up" spark={[92,93,94,95,96,97,98]} color="#7c3aed"/>
+        <KpiTile label="Total media" value={media.length.toLocaleString()} unit="files" delta={`${uploadedToday} today`} trend="up" spark={Array(7).fill(media.length)}/>
+        <KpiTile label="Uploaded today" value={String(uploadedToday)} unit="files" trend="up" spark={Array(7).fill(uploadedToday)} color="var(--success)"/>
+        <KpiTile label="Linked to flights" value={`${media.length ? Math.round((media.filter(m => m.flight).length / media.length) * 100) : 0}`} unit="%" trend="up" spark={Array(7).fill(media.filter(m => m.flight).length)} color="#7c3aed"/>
       </div>
 
       {/* Upload drop zone */}

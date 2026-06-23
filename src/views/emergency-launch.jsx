@@ -65,9 +65,16 @@ function EmergencyLaunchModal({ open, onClose, onLaunched }) {
     if (!open) { setEmType(""); setJustification(""); setArea(""); setAck(false); }
   }, [open]);
 
-  const justMin = 50;
+  const justMin = 20;
   const justOk  = justification.trim().length >= justMin;
   const canLaunch = !hardLocked && !!emType && justOk && !!aircraft && !!area.trim() && ack && !submitting;
+  const launchHint = submitting ? "" :
+    hardLocked ? "Emergency launches are locked" :
+    !emType ? "Select an emergency type" :
+    !aircraft ? "No aircraft available — register one in Aircraft registry" :
+    !area.trim() ? "Enter the location / area" :
+    !justOk ? `Justification needs ${justMin}+ characters (${justification.trim().length}/${justMin})` :
+    !ack ? "Tick the acknowledgement below to enable launch" : "";
 
   function launch() {
     if (!canLaunch) return;
@@ -129,6 +136,7 @@ function EmergencyLaunchModal({ open, onClose, onLaunched }) {
       </span>}
       subtitle="Skip the pre-flight checklist for a life-safety or time-critical mission. All emergency launches are reviewed."
       footer={<>
+        {launchHint && <span style={{ fontSize: 11.5, color: "var(--warning)", marginRight: "auto", alignSelf: "center" }}>{launchHint}</span>}
         <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
         <button
           className="btn"

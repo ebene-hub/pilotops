@@ -151,7 +151,7 @@ export async function bootstrap() {
   const media = mediaRaw.map((m) => ({
     id: m.id, name: m.name, type: m.type, size: m.size, dur: m.duration,
     pilot: m.pilot_id, flight: m.flight_id, area: m.area,
-    date: dateLabel(m.created_at), tags: m.tags || [], starred: m.starred, path: m.storage_path,
+    date: dateLabel(m.created_at), createdAt: m.created_at, tags: m.tags || [], starred: m.starred, path: m.storage_path,
   }));
 
   const sectors = {};
