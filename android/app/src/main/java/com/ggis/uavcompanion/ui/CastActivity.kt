@@ -39,7 +39,7 @@ class CastActivity : AppCompatActivity() {
                 val ok = Supabase.grantStream(token, flightId, StreamConfig.grantUrl).getOrDefault(false)
                 main.post {
                     if (ok) {
-                        ScreenCastService.start(this, res.resultCode, data, StreamConfig.ingestUrl(flightId))
+                        ScreenCastService.start(this, res.resultCode, data, StreamConfig.ingestUrl(flightId), token, flightId)
                         casting = true; render()
                     } else {
                         setStatus("Couldn't authorize the cast — check your sign-in and that the mission is live, then retry.")
@@ -59,7 +59,7 @@ class CastActivity : AppCompatActivity() {
         token = intent.getStringExtra(EXTRA_TOKEN).orEmpty()
         flightId = intent.getStringExtra(EXTRA_FLIGHT_ID).orEmpty()
         b.mission.text = intent.getStringExtra(EXTRA_FLIGHT_LABEL) ?: flightId
-        b.target.text = "Target · ${StreamConfig.scheme.uppercase()} · ${StreamConfig.host}"
+        b.target.visibility = android.view.View.GONE
 
         b.toggle.setOnClickListener { if (casting) stop() else preflight() }
         render()
@@ -67,6 +67,8 @@ class CastActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Flight ended while we were backgrounded → log out now.
+        if (CastBus.ended) { goLogin(); return }
         CastBus.listener = { onStatus(it) }
         onStatus(CastBus.last)
     }
@@ -99,7 +101,18 @@ class CastActivity : AppCompatActivity() {
             is CastStatus.Live -> { casting = true; setStatus(if (s.bitrateKbps > 0) "LIVE · ${s.bitrateKbps} kbps" else "LIVE"); render() }
             is CastStatus.Failed -> { casting = false; setStatus("Failed · ${s.reason}"); render() }
             is CastStatus.Stopped -> { casting = false; setStatus("Idle"); render() }
+            is CastStatus.Ended -> { casting = false; goLogin() }
         }
+    }
+
+    // Mission ended → stop is already done by the service; return to sign-in.
+    private fun goLogin() {
+        CastBus.ended = false
+        CastBus.listener = null
+        startActivity(Intent(this, LoginActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        })
+        finish()
     }
 
     private fun render() { b.toggle.text = if (casting) "Stop casting" else "Start casting" }

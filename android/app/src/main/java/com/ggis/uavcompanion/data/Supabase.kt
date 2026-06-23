@@ -63,6 +63,21 @@ object Supabase {
         }
     }
 
+    /** Current status of a flight ('live', 'completed', …), or null. */
+    fun flightStatus(token: String, flightId: String): Result<String?> = runCatching {
+        val req = Request.Builder()
+            .url("$base/rest/v1/flights?select=status&id=eq.$flightId")
+            .header("apikey", anon)
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+        http.newCall(req).execute().use { res ->
+            if (!res.isSuccessful) return@use null
+            val arr = JSONArray(res.body?.string().orEmpty())
+            if (arr.length() == 0) null else arr.getJSONObject(0).optString("status").ifEmpty { null }
+        }
+    }
+
     /** Pre-authorise a cast: the gateway records a short-lived publish grant for
      *  this flight so the (token-less) RTMP push that follows is allowed. */
     fun grantStream(token: String, flightId: String, grantUrl: String): Result<Boolean> = runCatching {

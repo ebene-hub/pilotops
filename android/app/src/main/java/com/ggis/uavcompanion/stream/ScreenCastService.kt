@@ -11,15 +11,19 @@ import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.ggis.uavcompanion.R
+import com.ggis.uavcompanion.data.Supabase
 import com.ggis.uavcompanion.ui.CastActivity
 import com.pedro.common.ConnectChecker
 import com.pedro.encoder.input.sources.audio.NoAudioSource
 import com.pedro.encoder.input.sources.video.NoVideoSource
 import com.pedro.encoder.input.sources.video.ScreenSource
 import com.pedro.library.generic.GenericStream
+import kotlin.concurrent.thread
 import kotlin.math.max
 import kotlin.math.min
 
@@ -33,6 +37,8 @@ class ScreenCastService : Service(), ConnectChecker {
     private var stream: GenericStream? = null
     private var projection: MediaProjection? = null
     private val mpm by lazy { getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager }
+    @Volatile private var polling = false
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -50,6 +56,8 @@ class ScreenCastService : Service(), ConnectChecker {
         val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
         val data: Intent? = intent.getParcelableExtra(EXTRA_DATA)
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
+        val token = intent.getStringExtra(EXTRA_TOKEN).orEmpty()
+        val flightId = intent.getStringExtra(EXTRA_FLIGHT_ID).orEmpty()
         if (data == null || url.isEmpty()) { stopCast(); return }
 
         CastBus.emit(CastStatus.Connecting)
@@ -79,12 +87,34 @@ class ScreenCastService : Service(), ConnectChecker {
         try {
             s.changeVideoSource(ScreenSource(applicationContext, mp))
             s.startStream(url)
+            startEndWatch(token, flightId)
         } catch (e: Exception) {
             CastBus.emit(CastStatus.Failed(e.message ?: "Could not start cast")); stopCast()
         }
     }
 
+    // Poll the flight while casting; when Pilot Ops ends it, stop and signal the
+    // app to log the pilot out (works even while the app is backgrounded).
+    private fun startEndWatch(token: String, flightId: String) {
+        if (token.isEmpty() || flightId.isEmpty()) return
+        polling = true
+        thread {
+            while (polling) {
+                try { Thread.sleep(8000) } catch (_: InterruptedException) {}
+                if (!polling) break
+                val status = Supabase.flightStatus(token, flightId).getOrNull() ?: continue
+                if (status != "live") {
+                    CastBus.ended = true
+                    CastBus.emit(CastStatus.Ended)
+                    mainHandler.post { stopCast() }
+                    break
+                }
+            }
+        }
+    }
+
     private fun stopCast() {
+        polling = false
         try { stream?.let { if (it.isStreaming) it.stopStream() } } catch (_: Exception) {}
         try { stream?.release() } catch (_: Exception) {}
         stream = null
@@ -134,17 +164,21 @@ class ScreenCastService : Service(), ConnectChecker {
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_DATA = "data"
         const val EXTRA_URL = "url"
+        const val EXTRA_TOKEN = "token"
+        const val EXTRA_FLIGHT_ID = "flightId"
         private const val CHANNEL = "cast"
         private const val NOTIF_ID = 42
         private const val FPS = 30
         private const val BITRATE = 2_500_000
 
-        fun start(ctx: Context, resultCode: Int, data: Intent, url: String) {
+        fun start(ctx: Context, resultCode: Int, data: Intent, url: String, token: String, flightId: String) {
             val i = Intent(ctx, ScreenCastService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_RESULT_CODE, resultCode)
                 putExtra(EXTRA_DATA, data)
                 putExtra(EXTRA_URL, url)
+                putExtra(EXTRA_TOKEN, token)
+                putExtra(EXTRA_FLIGHT_ID, flightId)
             }
             if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
         }
