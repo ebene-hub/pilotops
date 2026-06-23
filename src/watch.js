@@ -1,5 +1,9 @@
-// Pilot Ops — public live watch page (no login). Resolves a flight by share_key,
-// plays the WebRTC feed, and shows read-only mission chat.
+// Pilot Ops — public live watch page (no login).
+//  - ?f=<flightId>&k=<shareKey>  → a single mission.
+//  - ?org=<watchKey>             → the org's permanent link: shows ALL currently
+//    live missions as a multi-screen gallery, following them as they start/end.
+// Plays WebRTC (WHEP) feeds and shows read-only + guest mission chat for the
+// focused tile.
 import { createClient } from "@supabase/supabase-js";
 
 const sb = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
@@ -9,24 +13,171 @@ const sb = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_
 const STREAM_BASE = (import.meta.env.VITE_STREAM_URL || "/stream").replace(/\/$/, "");
 
 const params = new URLSearchParams(location.search);
-// flightId/key are mutable: in permanent org mode they're resolved (and swapped)
-// as missions go live/end. In per-flight mode they come straight from the URL.
-let flightId = params.get("f") || "";
-let key = params.get("k") || "";
+const singleFlight = params.get("f") || "";
+const singleKey = params.get("k") || "";
 const watchKey = params.get("org") || "";
 
 const $ = (id) => document.getElementById(id);
-const video = $("v"), waiting = $("waiting"), liveBadge = $("liveBadge");
+const grid = $("grid"), waiting = $("waiting"), liveBadge = $("liveBadge");
 
-function fail(msg) {
-  $("main").innerHTML = `<div class="err">${msg}</div>`;
+// Chat targets whichever tile is focused.
+let flightId = "", key = "";
+
+function fail(msg) { $("main").innerHTML = `<div class="err">${msg}</div>`; }
+function setWaiting(text) {
+  waiting.style.display = "grid";
+  waiting.innerHTML = `<div class="inner"><span class="dot"></span>${text}</div>`;
 }
-function setLive(on) {
-  video.style.display = on ? "block" : "none";
-  waiting.style.display = on ? "none" : "grid";
-  liveBadge.classList.toggle("on", on);
+
+// Minimal WHEP client (same protocol as the in-app player).
+async function whepPlay(url, el) {
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  pc.addTransceiver("video", { direction: "recvonly" });
+  pc.addTransceiver("audio", { direction: "recvonly" });
+  pc.ontrack = (e) => { if (e.streams[0]) el.srcObject = e.streams[0]; };
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/sdp" }, body: offer.sdp });
+  if (!res.ok) { pc.close(); throw new Error("WHEP " + res.status); }
+  await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
+  return pc;
 }
-function setWaiting(text) { waiting.innerHTML = `<div class="inner"><span class="dot"></span>${text}</div>`; }
+
+// ---- Tiles (one per live mission) ------------------------------------------
+const tiles = new Map(); // flightId -> { el, video, pc, gen, key, label }
+let focusId = null;
+
+function connectTile(t) {
+  const myGen = ++t.gen;
+  whepPlay(`${STREAM_BASE}/${t.flightId}/whep?key=${encodeURIComponent(t.key)}`, t.video)
+    .then((p) => {
+      if (myGen !== t.gen) { try { p.close(); } catch {} return; }
+      t.pc = p;
+      p.onconnectionstatechange = () => {
+        if (myGen !== t.gen) return;
+        if (p.connectionState === "connected") t.el.classList.add("live");
+        else if (["failed", "disconnected", "closed"].includes(p.connectionState)) {
+          t.el.classList.remove("live"); try { p.close(); } catch {}
+          setTimeout(() => { if (myGen === t.gen) connectTile(t); }, 4000);
+        }
+      };
+    })
+    .catch(() => {
+      if (myGen !== t.gen) return;
+      t.el.classList.remove("live");
+      setTimeout(() => { if (myGen === t.gen) connectTile(t); }, 4000);
+    });
+}
+
+function addTile(s) {
+  const el = document.createElement("div");
+  el.className = "tile";
+  el.innerHTML =
+    `<video autoplay muted playsinline></video>` +
+    `<div class="tile-wait"><span class="dot"></span>Connecting…</div>` +
+    `<div class="tile-label"><span class="livedot"></span><b>${escapeHtml(s.code || "Live")}</b>` +
+    `<span class="area">${escapeHtml(s.area || "")}${s.pilot ? " · " + escapeHtml(s.pilot) : ""}</span></div>`;
+  const t = { el, video: el.querySelector("video"), pc: null, gen: 0,
+    flightId: s.flight, key: s.key, label: s.code || "Live" };
+  el.addEventListener("click", () => setFocus(t.flightId));
+  tiles.set(s.flight, t);
+  grid.appendChild(el);
+  connectTile(t);
+  return t;
+}
+
+function removeTile(id) {
+  const t = tiles.get(id);
+  if (!t) return;
+  t.gen++; try { t.pc?.close(); } catch {}
+  t.el.remove();
+  tiles.delete(id);
+}
+
+function setFocus(id) {
+  focusId = id;
+  const t = id ? tiles.get(id) : null;
+  for (const [fid, tt] of tiles) tt.el.classList.toggle("focused", fid === id);
+  const head = document.querySelector(".chat-head h3");
+  if (t) {
+    flightId = t.flightId; key = t.key;
+    document.title = `${t.label} · Pilot Ops`;
+    if (head) head.textContent = tiles.size > 1 ? `Chat · ${t.label}` : "Mission chat";
+    renderChat([]); pollChatOnce();
+  } else {
+    flightId = ""; key = "";
+    if (head) head.textContent = "Mission chat";
+    renderChat([]);
+  }
+}
+
+function layoutGrid() {
+  grid.classList.toggle("single", tiles.size <= 1);
+  waiting.style.display = tiles.size ? "none" : "grid";
+  liveBadge.classList.toggle("on", tiles.size > 0);
+}
+
+function setMeta(streams) {
+  const n = streams.length;
+  if (n === 0) { $("meta").textContent = "Waiting for the next mission"; return; }
+  if (n === 1) { const s = streams[0]; $("meta").innerHTML = `<b>${escapeHtml(s.code || "Live")}</b> · ${escapeHtml(s.area || "")}${s.pilot ? " · " + escapeHtml(s.pilot) : ""}`; return; }
+  $("meta").innerHTML = `<b>${n} missions live</b> · tap a feed to view its chat`;
+}
+
+// Reconcile the visible tiles against the current live set.
+function syncTiles(streams) {
+  const liveIds = new Set(streams.map((s) => s.flight));
+  for (const id of [...tiles.keys()]) if (!liveIds.has(id)) removeTile(id);
+  for (const s of streams) if (!tiles.has(s.flight)) addTile(s);
+  if (!focusId || !tiles.has(focusId)) setFocus(streams[0] ? streams[0].flight : null);
+  layoutGrid();
+  setMeta(streams);
+}
+
+// ---- Chat (focused tile) ----------------------------------------------------
+function relTime(ts) {
+  const d = Date.now() - new Date(ts).getTime();
+  if (d < 60000) return "just now";
+  if (d < 3600000) return Math.floor(d / 60000) + "m";
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+function renderChat(msgs) {
+  const box = $("msgs");
+  if (!msgs.length) { box.innerHTML = '<div class="empty">No messages yet.</div>'; return; }
+  box.innerHTML = msgs.map((m) => `
+    <div class="msg ${m.role === "guest" ? "guest" : ""}">
+      <div class="who">${escapeHtml(m.from || "Crew")}<span class="time">${relTime(m.at)}</span></div>
+      <div class="text">${escapeHtml(m.text || "")}</div>
+    </div>`).join("");
+  box.scrollTop = box.scrollHeight;
+}
+async function pollChatOnce() {
+  if (!flightId || !key) { renderChat([]); return; }
+  const f = flightId, k = key;
+  const { data } = await sb.rpc("get_public_chat", { p_flight: f, p_key: k });
+  if (f === flightId && data?.ok) renderChat(data.messages || []);
+}
+function chatLoop() { pollChatOnce().finally(() => setTimeout(chatLoop, 4000)); }
+
+function nameFor() {
+  let n = localStorage.getItem("po:watch:name") || "";
+  if (!n) { n = (prompt("Your name to chat as:") || "").trim().slice(0, 40); if (n) localStorage.setItem("po:watch:name", n); }
+  return n || "Guest";
+}
+function wireSend() {
+  const form = $("sendForm"), input = $("chatinput"), btn = $("sendBtn");
+  if (!form) return;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text || !flightId) return;
+    btn.disabled = true;
+    const { data } = await sb.rpc("post_public_chat", { p_flight: flightId, p_key: key, p_name: nameFor(), p_text: text });
+    btn.disabled = false;
+    if (data?.ok) { input.value = ""; pollChatOnce(); }
+  });
+}
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
 // Teams-style controls: fullscreen + collapsible chat.
 function wireUi() {
@@ -43,134 +194,35 @@ function wireUi() {
   $("btnChat")?.addEventListener("click", toggleChat);
   $("chatMin")?.addEventListener("click", toggleChat);
 }
-wireUi();
 
-// Minimal WHEP client (same protocol as the in-app player).
-async function whepPlay(url, el) {
-  const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-  pc.addTransceiver("video", { direction: "recvonly" });
-  pc.addTransceiver("audio", { direction: "recvonly" });
-  pc.ontrack = (e) => { if (e.streams[0]) el.srcObject = e.streams[0]; };
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/sdp" }, body: offer.sdp });
-  if (!res.ok) { pc.close(); throw new Error("WHEP " + res.status); }
-  await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
-  return pc;
-}
-
-let pc = null;
-// Generation guard: bumping `gen` (on teardown / mission switch) cancels any
-// in-flight connection + pending retry so we never reconnect to a stale flight.
-let gen = 0;
-function teardown() { gen++; if (pc) { try { pc.close(); } catch {} pc = null; } setLive(false); }
-function connectStream() {
-  const myGen = gen;
-  whepPlay(`${STREAM_BASE}/${flightId}/whep?key=${encodeURIComponent(key)}`, video)
-    .then((p) => {
-      if (myGen !== gen) { try { p.close(); } catch {} return; }
-      pc = p;
-      p.onconnectionstatechange = () => {
-        if (myGen !== gen) return;
-        if (p.connectionState === "connected") setLive(true);
-        else if (["failed", "disconnected", "closed"].includes(p.connectionState)) {
-          setLive(false); setWaiting("Waiting for controller feed"); try { p.close(); } catch {}
-          setTimeout(() => { if (myGen === gen) connectStream(); }, 4000);
-        }
-      };
-    })
-    .catch(() => {
-      if (myGen !== gen) return;
-      setLive(false); setWaiting("Waiting for controller feed");
-      setTimeout(() => { if (myGen === gen) connectStream(); }, 4000);
-    });
-}
-
-function relTime(ts) {
-  const d = Date.now() - new Date(ts).getTime();
-  if (d < 60000) return "just now";
-  if (d < 3600000) return Math.floor(d / 60000) + "m";
-  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-function initials(name) { return (name || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase(); }
-
-function renderChat(msgs) {
-  const box = $("msgs");
-  if (!msgs.length) { box.innerHTML = '<div class="empty">No messages yet.</div>'; return; }
-  box.innerHTML = msgs.map((m) => `
-    <div class="msg ${m.role === "guest" ? "guest" : ""}">
-      <div class="who">${escapeHtml(m.from || "Crew")}<span class="time">${relTime(m.at)}</span></div>
-      <div class="text">${escapeHtml(m.text || "")}</div>
-    </div>`).join("");
-  box.scrollTop = box.scrollHeight;
-}
-async function pollChatOnce() {
-  if (!flightId || !key) { renderChat([]); return; }
-  const { data } = await sb.rpc("get_public_chat", { p_flight: flightId, p_key: key });
-  if (data?.ok) renderChat(data.messages || []);
-}
-function chatLoop() { pollChatOnce().finally(() => setTimeout(chatLoop, 4000)); }
-
-function nameFor() {
-  let n = localStorage.getItem("po:watch:name") || "";
-  if (!n) { n = (prompt("Your name to chat as:") || "").trim().slice(0, 40); if (n) localStorage.setItem("po:watch:name", n); }
-  return n || "Guest";
-}
-function wireSend() {
-  const form = $("sendForm"), input = $("chatinput"), btn = $("sendBtn");
-  if (!form) return;
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const text = input.value.trim();
-    if (!text) return;
-    btn.disabled = true;
-    const { data } = await sb.rpc("post_public_chat", { p_flight: flightId, p_key: key, p_name: nameFor(), p_text: text });
-    btn.disabled = false;
-    if (data?.ok) { input.value = ""; pollChatOnce(); }
-  });
-}
-function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
-
-// Permanent org link — follow whichever mission is currently live. Polls the
-// active-mission resolver; switches the player + chat when a new mission goes
-// live, and shows a waiting state (still polling) when the org is idle.
-function orgMode() {
-  let curFlight = null;
-  async function tick() {
-    const { data } = await sb.rpc("get_active_public_stream", { p_watch_key: watchKey });
-    if (data?.ok) {
-      if (data.flight !== curFlight) {
-        curFlight = data.flight; flightId = data.flight; key = data.key;
-        document.title = `${data.code || "Live"} · Pilot Ops`;
-        $("meta").textContent = `${data.area || ""}${data.pilot ? " · " + data.pilot : ""}`;
-        teardown(); setWaiting("Connecting to live mission…"); connectStream(); pollChatOnce();
-      }
-    } else if (data?.reason === "invalid") {
-      return fail("This watch link is invalid.");
-    } else if (curFlight || flightId) {
-      curFlight = null; flightId = ""; key = "";
-      teardown(); setWaiting("No active mission right now — this page goes live automatically when a mission starts.");
-      $("meta").textContent = "Waiting for the next mission"; renderChat([]);
-    } else {
-      setWaiting("No active mission right now — this page goes live automatically when a mission starts.");
-      $("meta").textContent = "Waiting for the next mission";
-    }
-    setTimeout(tick, 6000);
+// ---- Org (permanent) mode: follow all live missions -------------------------
+async function orgTick() {
+  let streams;
+  let { data, error } = await sb.rpc("get_active_public_streams", { p_watch_key: watchKey });
+  if (error) {
+    // Migration 0017 not applied yet — fall back to the single-stream resolver.
+    const r = await sb.rpc("get_active_public_stream", { p_watch_key: watchKey });
+    if (r.data?.reason === "invalid") return fail("This watch link is invalid.");
+    streams = r.data?.ok ? [r.data] : [];
+  } else {
+    if (data?.reason === "invalid") return fail("This watch link is invalid.");
+    streams = data?.streams || [];
   }
-  tick();
-  chatLoop();
-  wireSend();
+  if (!streams.length) setWaiting("No active mission right now — this page goes live automatically when a mission starts.");
+  syncTiles(streams);
+  setTimeout(orgTick, 6000);
 }
+
+// ---- init -------------------------------------------------------------------
+wireUi();
+wireSend();
+chatLoop();
 
 (async () => {
-  if (watchKey) return orgMode();
-  if (!flightId || !key) return fail("Invalid link.");
-  const { data, error } = await sb.rpc("get_public_stream", { p_flight: flightId, p_key: key });
+  if (watchKey) return orgTick();
+  if (!singleFlight || !singleKey) return fail("Invalid link.");
+  const { data, error } = await sb.rpc("get_public_stream", { p_flight: singleFlight, p_key: singleKey });
   if (error || !data?.ok) return fail("This live link is invalid or has expired.");
-  document.title = `${data.code || "Live"} · Pilot Ops`;
-  $("meta").textContent = `${data.area || ""}${data.pilot ? " · " + data.pilot : ""}`;
+  syncTiles([{ flight: singleFlight, key: singleKey, code: data.code, area: data.area, pilot: data.pilot }]);
   if (data.status !== "live") setWaiting("Mission not currently live");
-  connectStream();
-  chatLoop();
-  wireSend();
 })();

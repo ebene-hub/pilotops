@@ -45,7 +45,24 @@
 
     .stage { position: relative; min-height: 0; display: flex; flex-direction: column; }
     .videowrap { position: relative; flex: 1; min-height: 0; background: var(--stage); border-radius: 10px; overflow: hidden; }
-    video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--stage); display: none; }
+    /* Gallery grid of live missions (multi-screen). One tile = one operation. */
+    .grid { position: absolute; inset: 0; display: grid; gap: 8px; padding: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); grid-auto-rows: 1fr; }
+    .grid.single { padding: 0; gap: 0; grid-template-columns: 1fr; }
+    .tile { position: relative; background: var(--stage); border-radius: 8px; overflow: hidden;
+      cursor: pointer; border: 2px solid transparent; min-height: 0; }
+    .grid.single .tile { border-radius: 10px; cursor: default; border-color: transparent !important; }
+    .tile.focused { border-color: var(--accent); }
+    .tile > video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--stage); }
+    .tile-wait { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); font-size: 12px; }
+    .tile.live .tile-wait { display: none; }
+    .tile-wait .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #e2a03f;
+      margin-right: 6px; animation: pulse 1.5s infinite; vertical-align: middle; }
+    .tile-label { position: absolute; left: 0; right: 0; bottom: 0; padding: 16px 12px 9px; font-size: 12px;
+      background: linear-gradient(transparent, rgba(0,0,0,.7)); display: flex; align-items: center; gap: 7px; pointer-events: none; }
+    .tile-label b { font-weight: 600; }
+    .tile-label .area { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tile-label .livedot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); flex: none; animation: pulse 1.5s infinite; }
     .waiting { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
     .waiting .inner { text-align: center; }
     .waiting .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #e2a03f; margin-right: 8px; animation: pulse 1.5s infinite; vertical-align: middle; }
@@ -105,7 +122,7 @@
     <main id="main">
       <section class="stage">
         <div class="videowrap">
-          <video id="v" autoplay muted playsinline></video>
+          <div class="grid" id="grid"></div>
           <div class="waiting" id="waiting"><div class="inner"><span class="dot"></span>Connecting to feed…</div></div>
         </div>
         <div class="controls">
