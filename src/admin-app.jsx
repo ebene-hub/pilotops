@@ -725,28 +725,36 @@ function IntegrationsView() {
   const toast = useToast();
   const streamHost = (() => { try { return new URL(import.meta.env.VITE_STREAM_URL || location.origin, location.origin).hostname; } catch { return "your-stream-host"; } })();
   const copy = (t) => { try { navigator.clipboard?.writeText(t); toast({ kind: "success", title: "Copied", msg: t }); } catch {} };
-  const [list, setList] = React.useState([
-    { n: "Slack", d: "Push notifications & livestream alerts to channels", st: "connected", icon: "link" },
-    { n: "Microsoft Teams", d: "Mirror Slack rules to Teams", st: "connected", icon: "link" },
-    { n: "Salesforce Service Cloud", d: "Sync incidents to cases", st: "disconnected", icon: "pin" },
-    { n: "ArcGIS Online", d: "Two-way layer sync for geospatial data", st: "connected", icon: "layers" },
-    { n: "AWS S3 archive", d: "Encrypted bucket for recordings & telemetry", st: "connected", icon: "shield" },
-    { n: "Twilio SMS", d: "SMS fallback for critical alerts", st: "connected", icon: "send" },
-    { n: "PagerDuty", d: "Escalations on critical incidents", st: "disconnected", icon: "warn" },
-    { n: "Webhooks", d: "Subscribe to any Pilot Ops event", st: "connected", icon: "link" },
-  ]);
-  const [editing, setEditing] = React.useState(null);
+  const sb = window.__supabase;
+  const KIND_LABEL = { slack: "Slack", teams: "Microsoft Teams", webhook: "Generic webhook" };
+  const [hooks, setHooks] = React.useState([]);
+  const [draft, setDraft] = React.useState({ kind: "slack", url: "", label: "" });
+  const [busy, setBusy] = React.useState(false);
 
-  function connect(c) {
-    setList(prev => prev.map(x => x.n === c.n ? { ...x, st: "connected" } : x));
-    setEditing(null);
-    toast({ kind: "success", title: "Connected", msg: `${c.n} is now active. Test by triggering a sample event.` });
+  async function loadHooks() {
+    if (!sb) return;
+    const { data } = await sb.from("integrations").select("*").order("created_at", { ascending: false });
+    setHooks(data || []);
   }
-  function disconnect(c) {
-    if (!confirm(`Disconnect ${c.n}? Notification rules using it will pause.`)) return;
-    setList(prev => prev.map(x => x.n === c.n ? { ...x, st: "disconnected" } : x));
-    toast({ kind: "info", title: "Disconnected", msg: c.n });
-    setEditing(null);
+  React.useEffect(() => { loadHooks(); }, []);
+
+  async function addHook() {
+    if (!/^https?:\/\/.+/i.test(draft.url.trim())) { toast({ kind: "warn", title: "Enter a valid URL", msg: "Paste the incoming-webhook URL." }); return; }
+    setBusy(true);
+    const { error } = await sb.from("integrations").insert({ kind: draft.kind, url: draft.url.trim(), label: draft.label.trim() || null, active: true });
+    setBusy(false);
+    if (error) { toast({ kind: "warn", title: "Couldn't add", msg: error.message }); return; }
+    setDraft({ kind: "slack", url: "", label: "" }); loadHooks();
+    toast({ kind: "success", title: "Webhook added", msg: "Pilot Ops will POST new incidents here." });
+  }
+  async function toggleHook(h) { await sb.from("integrations").update({ active: !h.active }).eq("id", h.id); loadHooks(); }
+  async function removeHook(h) { if (!confirm("Remove this webhook?")) return; await sb.from("integrations").delete().eq("id", h.id); loadHooks(); }
+  async function testHook(h) {
+    const body = h.kind === "webhook"
+      ? JSON.stringify({ event: "test", message: "Pilot Ops test event", at: new Date().toISOString() })
+      : JSON.stringify({ text: "✅ Pilot Ops test — your incident webhook is working." });
+    try { await fetch(h.url, { method: "POST", mode: "no-cors", headers: { "Content-Type": "application/json" }, body }); toast({ kind: "success", title: "Test sent", msg: "Check your channel / endpoint." }); }
+    catch (e) { toast({ kind: "warn", title: "Test failed", msg: e.message }); }
   }
 
   return (
@@ -785,77 +793,50 @@ function IntegrationsView() {
         </div>
       </div>
 
-      <div className="grid-2">
-        {list.map(c => (
-          <div key={c.n} className="card">
-            <div className="card-body" style={{ display: "flex", gap: 14, alignItems: "center" }}>
-              <div style={{ width: 40, height: 40, borderRadius: 10, background: c.st === "connected" ? "color-mix(in oklab, var(--success) 12%, transparent)" : "var(--bg-muted)", color: c.st === "connected" ? "var(--success)" : "var(--text-3)", display: "grid", placeItems: "center", flexShrink: 0 }}>
-                <Icon name={c.icon} size={18}/>
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: 13.5 }}>{c.n}</div>
-                <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{c.d}</div>
-              </div>
-              <button className={"btn btn-sm " + (c.st === "connected" ? "" : "btn-primary")}
-                onClick={() => setEditing(c)}>
-                {c.st === "connected" ? "Configure" : "Connect"}
-              </button>
-            </div>
+      {/* Real outgoing webhooks (Slack / Teams / generic) */}
+      <div className="card">
+        <div className="card-head" style={{ gap: 12 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 10, background: "color-mix(in oklab, var(--accent) 12%, transparent)", color: "var(--accent)", display: "grid", placeItems: "center", flexShrink: 0 }}><Icon name="link" size={18}/></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="card-title">Outgoing webhooks</div>
+            <div className="muted" style={{ fontSize: 12 }}>POST every new incident to Slack, Microsoft Teams, or any endpoint. Paste an incoming-webhook URL — no OAuth needed.</div>
           </div>
-        ))}
+        </div>
+        <div className="card-body" style={{ display: "grid", gap: 12 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <select className="select" value={draft.kind} onChange={e => setDraft(d => ({ ...d, kind: e.target.value }))} style={{ width: 160 }}>
+              <option value="slack">Slack</option>
+              <option value="teams">Microsoft Teams</option>
+              <option value="webhook">Generic webhook</option>
+            </select>
+            <input className="input" placeholder="Label (optional)" value={draft.label} onChange={e => setDraft(d => ({ ...d, label: e.target.value }))} style={{ width: 160 }}/>
+            <input className="input mono" placeholder="https://hooks.slack.com/services/…" value={draft.url} onChange={e => setDraft(d => ({ ...d, url: e.target.value }))} style={{ flex: 1, minWidth: 220, fontSize: 12 }}/>
+            <button className="btn btn-primary" onClick={addHook} disabled={busy}><Icon name="plus" size={13}/> Add</button>
+          </div>
+          {hooks.length === 0
+            ? <div className="muted" style={{ fontSize: 12.5, padding: "8px 2px" }}>No webhooks yet. Add a Slack or Teams incoming-webhook URL above to receive incident alerts.</div>
+            : hooks.map(h => (
+              <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)" }}>
+                <span className={"badge " + (h.active ? "badge-success" : "")} style={{ flexShrink: 0 }}>{KIND_LABEL[h.kind] || h.kind}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500 }}>{h.label || KIND_LABEL[h.kind] || h.kind}</div>
+                  <div className="mono muted" style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.url}</div>
+                </div>
+                <button className="btn btn-sm" onClick={() => testHook(h)}><Icon name="send" size={12}/> Test</button>
+                <button className="btn btn-sm" onClick={() => toggleHook(h)}>{h.active ? "Pause" : "Resume"}</button>
+                <button className="btn btn-sm" style={{ color: "var(--danger)" }} onClick={() => removeHook(h)}><Icon name="x" size={12}/></button>
+              </div>
+            ))}
+        </div>
       </div>
 
-      {editing && <IntegrationModal integration={editing} onClose={() => setEditing(null)} onConnect={connect} onDisconnect={disconnect} onTest={(c) => toast({ kind: "success", title: "Test event sent", msg: `Sample payload delivered to ${c.n}.` })}/>}
+      {/* Honest note: deeper platform integrations need bespoke setup */}
+      <div className="card" style={{ marginTop: "var(--density-gap)" }}>
+        <div className="card-body" style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.55 }}>
+          <Icon name="info" size={13} style={{ verticalAlign: "-2px" }}/> Deeper platform integrations (Salesforce, ArcGIS, Twilio SMS, PagerDuty, S3 archive) need bespoke credentials and backend wiring — they're intentionally not shown as "connected" until they actually are. Tell us which you need and we'll wire it.
+        </div>
+      </div>
     </>
-  );
-}
-
-function IntegrationModal({ integration, onClose, onConnect, onDisconnect, onTest }) {
-  const isConnected = integration.st === "connected";
-  return (
-    <Modal open onClose={onClose} icon={integration.icon} size="md"
-      title={isConnected ? `Configure ${integration.n}` : `Connect ${integration.n}`}
-      subtitle={integration.d}
-      footer={<>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        {isConnected && <button className="btn" onClick={() => onTest(integration)}><Icon name="send" size={13}/> Send test</button>}
-        {isConnected ? (
-          <button className="btn" style={{ color: "var(--danger)", borderColor: "color-mix(in oklab, var(--danger) 35%, var(--border))" }} onClick={() => onDisconnect(integration)}><Icon name="close" size={13}/> Disconnect</button>
-        ) : (
-          <button className="btn btn-primary" onClick={() => onConnect(integration)}><Icon name="check" size={13}/> Authorize & connect</button>
-        )}
-      </>}>
-      {isConnected ? (
-        <>
-          <div style={{ padding: 12, borderRadius: 8, background: "color-mix(in oklab, var(--success) 8%, transparent)", border: "1px solid color-mix(in oklab, var(--success) 30%, transparent)", marginBottom: 14, display: "flex", gap: 10, alignItems: "center" }}>
-            <Icon name="check" size={16} stroke="var(--success)"/>
-            <div style={{ fontSize: 13, color: "var(--text-2)" }}>Connected · last event delivered {Math.floor(Math.random() * 28 + 2)} min ago</div>
-          </div>
-          <div className="field" style={{ marginBottom: 12 }}>
-            <label className="field-label">Webhook URL</label>
-            <input className="input mono" defaultValue={`https://hooks.pilotops.io/${integration.n.toLowerCase().replace(/[^a-z]/g, "-")}/${Math.random().toString(36).slice(2,10)}`}/>
-          </div>
-          <div className="field">
-            <label className="field-label">Channels / topics</label>
-            <input className="input" defaultValue="#ops-alerts, #incidents-critical"/>
-          </div>
-        </>
-      ) : (
-        <>
-          <div className="field" style={{ marginBottom: 12 }}>
-            <label className="field-label">Account / workspace</label>
-            <input className="input" placeholder={`Your ${integration.n} workspace`}/>
-          </div>
-          <div className="field" style={{ marginBottom: 12 }}>
-            <label className="field-label">API key or token</label>
-            <input className="input mono" type="password" placeholder="sk-…"/>
-          </div>
-          <div style={{ padding: 12, borderRadius: 8, background: "var(--bg-subtle)", border: "1px solid var(--border)", fontSize: 12, color: "var(--text-2)" }}>
-            <Icon name="info" size={12} style={{ verticalAlign: "-1px" }}/> Pilot Ops will request the minimum scope needed for the notification rules you configure.
-          </div>
-        </>
-      )}
-    </Modal>
   );
 }
 

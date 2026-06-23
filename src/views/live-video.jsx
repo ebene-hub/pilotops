@@ -28,6 +28,9 @@ async function whepPlay(url, videoEl, token) {
   if (!res.ok) { pc.close(); throw new Error("WHEP " + res.status); }
   const answer = await res.text();
   await pc.setRemoteDescription({ type: "answer", sdp: answer });
+  // Minimise the receiver playout/jitter buffer for live ops — trade a little
+  // smoothing for ~hundreds of ms lower glass-to-glass latency.
+  pc.getReceivers().forEach((r) => { try { r.playoutDelayHint = 0; r.jitterBufferTarget = 0; } catch {} });
   return pc;
 }
 

@@ -40,6 +40,8 @@ async function whepPlay(url, el) {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/sdp" }, body: offer.sdp });
   if (!res.ok) { pc.close(); throw new Error("WHEP " + res.status); }
   await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
+  // Minimise the playout/jitter buffer for lower live latency.
+  pc.getReceivers().forEach((r) => { try { r.playoutDelayHint = 0; r.jitterBufferTarget = 0; } catch {} });
   return pc;
 }
 
