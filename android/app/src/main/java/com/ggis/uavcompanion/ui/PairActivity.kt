@@ -66,6 +66,7 @@ class PairActivity : AppCompatActivity() {
             putExtra(CastActivity.EXTRA_TOKEN, session.accessToken)
             putExtra(CastActivity.EXTRA_FLIGHT_ID, flight.id)
             putExtra(CastActivity.EXTRA_FLIGHT_LABEL, flight.code ?: flight.area ?: flight.id)
+            putExtra(CastActivity.EXTRA_AUTOSTART, true)
         })
     }
 

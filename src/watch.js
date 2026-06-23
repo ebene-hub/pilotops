@@ -9,8 +9,11 @@ const sb = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_
 const STREAM_BASE = (import.meta.env.VITE_STREAM_URL || "/stream").replace(/\/$/, "");
 
 const params = new URLSearchParams(location.search);
-const flightId = params.get("f") || "";
-const key = params.get("k") || "";
+// flightId/key are mutable: in permanent org mode they're resolved (and swapped)
+// as missions go live/end. In per-flight mode they come straight from the URL.
+let flightId = params.get("f") || "";
+let key = params.get("k") || "";
+const watchKey = params.get("org") || "";
 
 const $ = (id) => document.getElementById(id);
 const video = $("v"), waiting = $("waiting"), rec = $("rec"), liveBadge = $("liveBadge");
@@ -41,19 +44,30 @@ async function whepPlay(url, el) {
 }
 
 let pc = null;
+// Generation guard: bumping `gen` (on teardown / mission switch) cancels any
+// in-flight connection + pending retry so we never reconnect to a stale flight.
+let gen = 0;
+function teardown() { gen++; if (pc) { try { pc.close(); } catch {} pc = null; } setLive(false); }
 function connectStream() {
+  const myGen = gen;
   whepPlay(`${STREAM_BASE}/${flightId}/whep?key=${encodeURIComponent(key)}`, video)
     .then((p) => {
+      if (myGen !== gen) { try { p.close(); } catch {} return; }
       pc = p;
       p.onconnectionstatechange = () => {
+        if (myGen !== gen) return;
         if (p.connectionState === "connected") setLive(true);
         else if (["failed", "disconnected", "closed"].includes(p.connectionState)) {
           setLive(false); setWaiting("Waiting for controller feed"); try { p.close(); } catch {}
-          setTimeout(connectStream, 4000);
+          setTimeout(() => { if (myGen === gen) connectStream(); }, 4000);
         }
       };
     })
-    .catch(() => { setLive(false); setWaiting("Waiting for controller feed"); setTimeout(connectStream, 4000); });
+    .catch(() => {
+      if (myGen !== gen) return;
+      setLive(false); setWaiting("Waiting for controller feed");
+      setTimeout(() => { if (myGen === gen) connectStream(); }, 4000);
+    });
 }
 
 function relTime(ts) {
@@ -75,6 +89,7 @@ function renderChat(msgs) {
   box.scrollTop = box.scrollHeight;
 }
 async function pollChatOnce() {
+  if (!flightId || !key) { renderChat([]); return; }
   const { data } = await sb.rpc("get_public_chat", { p_flight: flightId, p_key: key });
   if (data?.ok) renderChat(data.messages || []);
 }
@@ -100,7 +115,39 @@ function wireSend() {
 }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
+// Permanent org link — follow whichever mission is currently live. Polls the
+// active-mission resolver; switches the player + chat when a new mission goes
+// live, and shows a waiting state (still polling) when the org is idle.
+function orgMode() {
+  let curFlight = null;
+  async function tick() {
+    const { data } = await sb.rpc("get_active_public_stream", { p_watch_key: watchKey });
+    if (data?.ok) {
+      if (data.flight !== curFlight) {
+        curFlight = data.flight; flightId = data.flight; key = data.key;
+        document.title = `${data.code || "Live"} · Pilot Ops`;
+        $("meta").textContent = `${data.area || ""}${data.pilot ? " · " + data.pilot : ""}`;
+        teardown(); setWaiting("Connecting to live mission…"); connectStream(); pollChatOnce();
+      }
+    } else if (data?.reason === "invalid") {
+      return fail("This watch link is invalid.");
+    } else if (curFlight || flightId) {
+      curFlight = null; flightId = ""; key = "";
+      teardown(); setWaiting("No active mission right now — this page goes live automatically when a mission starts.");
+      $("meta").textContent = "Waiting for the next mission"; renderChat([]);
+    } else {
+      setWaiting("No active mission right now — this page goes live automatically when a mission starts.");
+      $("meta").textContent = "Waiting for the next mission";
+    }
+    setTimeout(tick, 6000);
+  }
+  tick();
+  chatLoop();
+  wireSend();
+}
+
 (async () => {
+  if (watchKey) return orgMode();
   if (!flightId || !key) return fail("Invalid link.");
   const { data, error } = await sb.rpc("get_public_stream", { p_flight: flightId, p_key: key });
   if (error || !data?.ok) return fail("This live link is invalid or has expired.");

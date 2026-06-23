@@ -38,6 +38,8 @@ class ScreenCastService : Service(), ConnectChecker {
     private var projection: MediaProjection? = null
     private val mpm by lazy { getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager }
     @Volatile private var polling = false
+    @Volatile private var castToken = ""
+    @Volatile private var castFlightId = ""
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -58,6 +60,7 @@ class ScreenCastService : Service(), ConnectChecker {
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
         val token = intent.getStringExtra(EXTRA_TOKEN).orEmpty()
         val flightId = intent.getStringExtra(EXTRA_FLIGHT_ID).orEmpty()
+        castToken = token; castFlightId = flightId
         if (data == null || url.isEmpty()) { stopCast(); return }
 
         CastBus.emit(CastStatus.Connecting)
@@ -86,6 +89,7 @@ class ScreenCastService : Service(), ConnectChecker {
         if (mp == null) { CastBus.emit(CastStatus.Failed("Screen capture unavailable")); stopCast(); return }
         projection = mp
         try {
+            polling = true   // we're now "active"; handleDrop will check the flight on any drop
             s.changeVideoSource(ScreenSource(applicationContext, mp))
             s.startStream(url)
             startEndWatch(token, flightId)
@@ -130,10 +134,27 @@ class ScreenCastService : Service(), ConnectChecker {
     override fun onConnectionStarted(url: String) { CastBus.emit(CastStatus.Connecting) }
     override fun onConnectionSuccess() { CastBus.emit(CastStatus.Live(0)) }
     override fun onNewBitrate(bitrate: Long) { CastBus.emit(CastStatus.Live(bitrate / 1000)) }
-    override fun onConnectionFailed(reason: String) { CastBus.emit(CastStatus.Failed(reason)); stopCast() }
-    override fun onDisconnect() { CastBus.emit(CastStatus.Stopped) }
-    override fun onAuthError() { CastBus.emit(CastStatus.Failed("Stream auth rejected")); stopCast() }
+    override fun onConnectionFailed(reason: String) { handleDrop(reason, failed = true) }
+    override fun onDisconnect() { handleDrop(null, failed = false) }
+    override fun onAuthError() { handleDrop("Stream auth rejected", failed = true) }
     override fun onAuthSuccess() {}
+
+    // A dropped connection can mean Pilot Ops ended the mission (the server
+    // unpublishes us) or a transient network fault. This often fires *before* the
+    // end-watch poll, so check the flight here too: if it's no longer live, signal
+    // Ended (→ log the pilot out); otherwise just reflect failed/stopped.
+    private fun handleDrop(reason: String?, failed: Boolean) {
+        if (!polling) { CastBus.emit(CastStatus.Stopped); return }  // manual stop already underway
+        polling = false
+        val t = castToken; val fid = castFlightId
+        thread {
+            val live = if (t.isNotEmpty() && fid.isNotEmpty())
+                (Supabase.flightStatus(t, fid).getOrNull() == "live") else true
+            if (!live) { CastBus.ended = true; CastBus.emit(CastStatus.Ended) }
+            else CastBus.emit(if (failed) CastStatus.Failed(reason ?: "Connection lost") else CastStatus.Stopped)
+            mainHandler.post { stopCast() }
+        }
+    }
 
     // ---- foreground notification ----
     private fun startInForeground() {

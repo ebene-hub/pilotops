@@ -63,6 +63,10 @@ class CastActivity : AppCompatActivity() {
 
         b.toggle.setOnClickListener { if (casting) stop() else preflight() }
         render()
+
+        // Came straight from pairing / "use my active mission" → start casting now
+        // (still shows Android's screen-capture consent) instead of a second tap.
+        if (intent.getBooleanExtra(EXTRA_AUTOSTART, false) && !casting) preflight()
     }
 
     override fun onResume() {
@@ -122,5 +126,6 @@ class CastActivity : AppCompatActivity() {
         const val EXTRA_TOKEN = "token"
         const val EXTRA_FLIGHT_ID = "flightId"
         const val EXTRA_FLIGHT_LABEL = "flightLabel"
+        const val EXTRA_AUTOSTART = "autostart"
     }
 }
