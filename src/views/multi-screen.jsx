@@ -88,7 +88,7 @@ function FeedTile({ flight, index, onFocus, onPin }) {
 
       {/* mini feed */}
       <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
-        <LiveVideoFeed flight={flight} fill recording showAnnotations placeholder={<MiniFeed flight={flight} index={index}/>}/>
+        <LiveVideoFeed flight={flight} fill recording/>
       </div>
 
       {/* tile foot — telemetry */}

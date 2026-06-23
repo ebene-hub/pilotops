@@ -79,54 +79,44 @@ function LiveVideoFeed({ showAnnotations, flash, duration, flight, recording, pl
 
   const f = flight || {};
   const rootStyle = fill
-    ? { position: "absolute", inset: 0, width: "100%", height: "100%", background: "#0b0f17", overflow: "hidden" }
-    : { position: "relative", width: "100%", aspectRatio: "16/9", background: "#0b0f17", overflow: "hidden" };
-  const fallback = placeholder || (window.FakeVideoFeed
-    ? <FakeVideoFeed showAnnotations={showAnnotations} flash={flash} duration={duration} flight={f} recording={recording}/>
-    : null);
+    ? { position: "absolute", inset: 0, width: "100%", height: "100%", background: "#000", overflow: "hidden" }
+    : { position: "relative", width: "100%", aspectRatio: "16/9", background: "#000", overflow: "hidden" };
   return (
     <div style={rootStyle}>
-      {/* The simulated scene stays as the placeholder until the controller connects. */}
-      {state !== "live" && fallback}
+      {/* Custom placeholder (e.g. multi-screen tile) shows until the feed is live. */}
+      {state !== "live" && placeholder}
 
+      {/* contain — show the whole controller screen, letterboxed, never cropped. */}
       <video ref={videoRef} autoPlay muted playsInline
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: state === "live" ? "block" : "none", background: "#000" }}/>
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", display: state === "live" ? "block" : "none", background: "#000" }}/>
 
-      {/* HUD + connection state overlay on the real feed. */}
-      {state === "live" && !fill && (
-        <div style={{ position: "absolute", inset: 0, padding: 14, color: "white", fontFamily: "var(--font-mono)", fontSize: 11, display: "flex", flexDirection: "column", justifyContent: "space-between", pointerEvents: "none", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {recording && <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ef4444" }}/>}
-              <span style={{ fontWeight: 700 }}>{recording ? "REC" : "LIVE"}</span>
-              <span>· GGIS Companion · {f.id}</span>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div>ALT {f.altitude}M · SPD {f.speed}M/S</div>
-              {f.lat != null && f.lng != null && <div>{Number(f.lat).toFixed(4)}°N · {Number(f.lng).toFixed(4)}°E</div>}
-            </div>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
-            <div>Controller mirror · WebRTC</div>
-            <div>{f.uav?.id || "—"} · BATT {f.uav?.battery ?? "—"}% · SIG {f.signal}%</div>
-          </div>
+      {/* Minimal overlay on the real feed: just the REC badge. */}
+      {state === "live" && (
+        <div style={{ position: "absolute", top: fill ? 8 : 12, left: fill ? 8 : 12, display: "flex", gap: 6, alignItems: "center", color: "white", fontFamily: "var(--font-mono)", fontSize: fill ? 9 : 12, pointerEvents: "none", textShadow: "0 1px 2px rgba(0,0,0,0.7)" }}>
+          <span style={{ width: fill ? 6 : 8, height: fill ? 6 : 8, borderRadius: "50%", background: "#ef4444", animation: "pulse 1.5s infinite" }}/>
+          <span style={{ fontWeight: 700 }}>REC</span>
+          {!fill && <span>· GGIS Companion · {f.id}</span>}
         </div>
       )}
       {flash && <div style={{ position: "absolute", inset: 0, background: "white", opacity: 0.65, pointerEvents: "none" }}/>}
 
-      {/* Compact LIVE badge for multi-screen tiles. */}
-      {state === "live" && fill && (
-        <div style={{ position: "absolute", top: 8, left: 8, display: "flex", alignItems: "center", gap: 5, background: "rgba(11,15,23,0.7)", color: "white", padding: "2px 7px", borderRadius: 999, fontSize: 9, fontFamily: "var(--font-mono)" }}>
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#ef4444" }}/> LIVE
-        </div>
-      )}
-
-      {/* "Waiting" chip while the controller hasn't started casting. */}
-      {state !== "live" && (
-        <div style={{ position: "absolute", top: fill ? 8 : 12, left: fill ? 8 : 12, display: "flex", alignItems: "center", gap: fill ? 5 : 8, background: "rgba(11,15,23,0.78)", color: "white", padding: fill ? "2px 7px" : "5px 10px", borderRadius: 999, fontSize: fill ? 9 : 11.5, fontFamily: "var(--font-mono)" }}>
-          <span style={{ width: fill ? 6 : 8, height: fill ? 6 : 8, borderRadius: "50%", background: state === "connecting" ? "#f59e0b" : "#64748b", animation: state === "connecting" ? "pulse 1.5s infinite" : "none" }}/>
-          {state === "connecting" ? (fill ? "Connecting…" : "Connecting to controller…") : (fill ? "No feed" : "Waiting for controller feed")}
-        </div>
+      {/* Waiting state — clean, no simulated scene. */}
+      {state !== "live" && !placeholder && (
+        fill ? (
+          <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "#64748b", fontFamily: "var(--font-mono)", fontSize: 9 }}>
+            {state === "connecting" ? "Connecting…" : "No feed"}
+          </div>
+        ) : (
+          <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
+            <div style={{ textAlign: "center" }}>
+              {window.Icon && <Icon name="video" size={30} stroke="#475569"/>}
+              <div style={{ marginTop: 10, fontSize: 13, fontFamily: "var(--font-mono)", color: "#94a3b8", display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: state === "connecting" ? "#f59e0b" : "#64748b", animation: state === "connecting" ? "pulse 1.5s infinite" : "none" }}/>
+                {state === "connecting" ? "Connecting to controller…" : "Waiting for controller feed"}
+              </div>
+            </div>
+          </div>
+        )
       )}
     </div>
   );

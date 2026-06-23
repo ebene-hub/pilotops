@@ -21,6 +21,31 @@ function formatBytes(b) {
   return b + " B";
 }
 
+// Real media preview from the private bucket via a signed URL (videos play,
+// photos render). Falls back to the styled thumbnail if there's no file.
+function MediaPreview({ item }) {
+  const [url, setUrl] = mgUseState(null);
+  const [err, setErr] = mgUseState(false);
+  mgUseEffect(() => {
+    let cancelled = false;
+    setUrl(null); setErr(false);
+    const path = item?.path;
+    if (!path || !window.__supabase) { setErr(true); return; }
+    window.__supabase.storage.from("media").createSignedUrl(path, 3600).then(({ data, error }) => {
+      if (cancelled) return;
+      if (error || !data?.signedUrl) setErr(true); else setUrl(data.signedUrl);
+    });
+    return () => { cancelled = true; };
+  }, [item?.id]);
+
+  const box = { width: "100%", height: 360, background: "#0b0f17" };
+  if (err || !item?.path) return <div style={{ height: 360 }}><MediaThumb item={item}/></div>;
+  if (!url) return <div style={{ ...box, display: "grid", placeItems: "center", color: "var(--text-3)", fontSize: 12.5 }}>Loading…</div>;
+  if (item.type === "video") return <video src={url} controls autoPlay playsInline style={{ ...box, objectFit: "contain" }}/>;
+  if (item.type === "photo" || item.type === "thermal" || item.type === "map") return <img src={url} alt={item.name} style={{ ...box, objectFit: "contain" }}/>;
+  return <div style={{ height: 360 }}><MediaThumb item={item}/></div>;
+}
+
 /* ---------- Pseudo-realistic thumbnail per media item ---------- */
 function MediaThumb({ item, size = "card" }) {
   const small = size === "small";
@@ -485,30 +510,26 @@ function MediaGalleryView({ accent }) {
                      <Icon name="star" size={14} fill={selected.starred ? "#fbbf24" : "none"} stroke={selected.starred ? "#fbbf24" : "currentColor"}/>
                      {selected.starred ? "Starred" : "Star"}
                    </button>
-                   <button className="btn"><Icon name="link" size={14}/> Copy link</button>
+                   <button className="btn" onClick={async () => {
+                     if (!selected.path) return toast({ kind: "warn", title: "No file", msg: "Nothing to link." });
+                     const { data } = await window.__supabase.storage.from("media").createSignedUrl(selected.path, 3600);
+                     if (data?.signedUrl) { navigator.clipboard?.writeText(data.signedUrl); toast({ kind: "success", title: "Link copied", msg: "Signed link · valid 1 hour" }); }
+                   }}><Icon name="link" size={14}/> Copy link</button>
                    <button className="btn"><Icon name="warn" size={14}/> Attach to incident</button>
                    <div style={{ flex: 1 }}/>
                    <button className="btn btn-danger" onClick={() => removeItem(selected)}><Icon name="trash" size={14}/> Delete</button>
-                   <button className="btn btn-primary"><Icon name="download" size={14}/> Download</button>
+                   <button className="btn btn-primary" onClick={async () => {
+                     if (!selected.path) return toast({ kind: "warn", title: "No file", msg: "Nothing to download." });
+                     const { data } = await window.__supabase.storage.from("media").createSignedUrl(selected.path, 3600, { download: selected.name });
+                     if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+                   }}><Icon name="download" size={14}/> Download</button>
                  </>
                }>
           <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 18 }}>
             <div>
               <div style={{ borderRadius: 10, overflow: "hidden", border: "1px solid var(--border)" }}>
-                <div style={{ height: 360 }}>
-                  <MediaThumb item={selected}/>
-                </div>
+                <MediaPreview item={selected}/>
               </div>
-              {selected.type === "video" && (
-                <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--bg-subtle)", borderRadius: 8 }}>
-                  <button className="btn btn-sm"><Icon name="play" size={12}/></button>
-                  <span className="mono" style={{ fontSize: 11, color: "var(--text-3)" }}>00:00 / {selected.dur}</span>
-                  <div style={{ flex: 1, height: 4, background: "var(--border)", borderRadius: 2, position: "relative" }}>
-                    <div style={{ width: "12%", height: "100%", background: "var(--accent)", borderRadius: 2 }}/>
-                  </div>
-                  <span className="mono" style={{ fontSize: 11, color: "var(--text-3)" }}>4K · 30fps</span>
-                </div>
-              )}
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <DetailRow label="File ID" value={selected.id} mono/>

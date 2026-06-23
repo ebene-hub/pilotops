@@ -123,8 +123,16 @@ function NotifyComposerView({ teamRoster, fieldConfig, onOpenStream }) {
       flight_id: flight.id, state: preflightState, signoff: true,
       signed_by: pilotRow?.memberId || null, signed_at: new Date().toISOString(),
     });
+    // Notify the live-stream link to admins (in-app bell) + stakeholders who opted
+    // into pre-flight notices (their emails are recorded for delivery).
+    const streamLink = (typeof window !== "undefined" ? window.location.origin : "") + "/";
+    const recipients = (window.STAKEHOLDERS || [])
+      .filter((s) => (s.notify || []).includes("pre-flight") && s.email)
+      .map((s) => ({ name: s.name, email: s.email }));
     await supabase.from("notifications").insert({
-      type: "mission_start", payload: { flight: flightId, area: form.coverageArea }, recipients: [],
+      type: "mission_start",
+      payload: { flight: flightId, area: form.coverageArea, link: streamLink },
+      recipients,
     });
     await supabase.from("audit_log").insert({
       actor_id: pilotRow?.memberId || null, actor_name: pilotMember?.name,

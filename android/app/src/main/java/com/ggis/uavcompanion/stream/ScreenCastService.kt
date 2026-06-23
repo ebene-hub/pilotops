@@ -77,7 +77,8 @@ class ScreenCastService : Service(), ConnectChecker {
         stream = s
 
         val prepared = try {
-            s.prepareVideo(w, h, BITRATE, FPS, rotation = rotation) && s.prepareAudio(32000, true, 128 * 1000)
+            // iFrameInterval = 1s (frequent keyframes) trims connect + recovery latency.
+            s.prepareVideo(w, h, BITRATE, FPS, iFrameInterval = 1, rotation = rotation) && s.prepareAudio(32000, true, 128 * 1000)
         } catch (_: Exception) { false }
         if (!prepared) { CastBus.emit(CastStatus.Failed("Encoder init failed")); stopCast(); return }
 

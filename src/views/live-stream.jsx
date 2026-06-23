@@ -18,6 +18,20 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   const [endOpen, setEndOpen] = lsUseState(false);
   const toast = useToast();
   const chatEnd = lsUseRef(null);
+  const videoBoxRef = lsUseRef(null);
+
+  const streamLink = (typeof window !== "undefined" ? window.location.origin : "") + "/";
+  const shareStream = async () => {
+    const payload = { title: `Pilot Ops — ${f.id} live`, text: `Live drone feed: ${f.area}`, url: streamLink };
+    try { if (navigator.share) { await navigator.share(payload); return; } } catch {}
+    try { await navigator.clipboard.writeText(streamLink); toast({ kind: "success", title: "Link copied", msg: streamLink }); }
+    catch { toast({ kind: "info", title: "Share link", msg: streamLink }); }
+  };
+  const toggleFullscreen = () => {
+    const el = videoBoxRef.current; if (!el) return;
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else el.requestFullscreen?.();
+  };
 
   lsUseEffect(() => {
     const t = setInterval(() => setDuration(d => d + 1), 1000);
@@ -116,8 +130,8 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
           </div>
         </div>
         <div className="page-actions">
-          <button className="btn"><Icon name="link" size={14}/> Share link</button>
-          <button className="btn" onClick={() => { navigator.clipboard?.writeText("https://pilotops.io/stream/" + f.id); toast({ kind: "info", title: "Link copied" }); }}>
+          <button className="btn" onClick={shareStream}><Icon name="link" size={14}/> Share link</button>
+          <button className="btn" onClick={() => { navigator.clipboard?.writeText(streamLink); toast({ kind: "success", title: "Link copied", msg: streamLink }); }}>
             <Icon name="paperclip" size={14}/> Copy URL
           </button>
           <button className="btn btn-danger" onClick={() => setEndOpen(true)}><Icon name="stop" size={14}/> End flight</button>
@@ -128,7 +142,9 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
         {/* Video + telemetry */}
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--density-gap)" }}>
           <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-            <LiveVideoFeed showAnnotations={showAnnotations} flash={flash} duration={duration} flight={f} recording={recording}/>
+            <div ref={videoBoxRef} style={{ background: "#000", display: "grid", placeItems: "center" }}>
+              <LiveVideoFeed showAnnotations={showAnnotations} flash={flash} duration={duration} flight={f} recording={recording}/>
+            </div>
             {/* Video toolbar */}
             <div style={{ display: "flex", gap: 8, padding: "10px 14px", borderTop: "1px solid var(--border)", alignItems: "center", background: "var(--surface)" }}>
               <button className="btn btn-sm" onClick={() => setRecording(!recording)}>
@@ -141,7 +157,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
               <button className="btn btn-sm btn-ghost"><Icon name="zoom" size={12}/> Zoom 1.0x</button>
               <div className="grow"/>
               <span className="mono tabular muted" style={{ fontSize: 12 }}>{fmt(duration)}</span>
-              <button className="btn btn-sm btn-ghost"><Icon name="expand" size={12}/></button>
+              <button className="btn btn-sm btn-ghost" onClick={toggleFullscreen} title="Fullscreen"><Icon name="expand" size={12}/></button>
             </div>
           </div>
 
