@@ -49,12 +49,30 @@ async function whepPlay(url, el) {
 const tiles = new Map(); // flightId -> { el, video, pc, gen, key, label }
 let focusId = null;
 
+// Silent-freeze watchdog: a tile can stay "connected" yet stop rendering new
+// frames (packet loss → decoder waits for a keyframe). Watch the video clock and
+// reconnect the tile cleanly if it stops advancing for ~4s while playing.
+function watchTile(t, myGen) {
+  clearInterval(t.stall);
+  let lastT = -1, stalls = 0;
+  t.stall = setInterval(() => {
+    if (myGen !== t.gen) { clearInterval(t.stall); return; }
+    const v = t.video;
+    if (!v || v.paused || v.ended) { stalls = 0; return; }
+    const c = v.currentTime;
+    if (c > lastT + 0.01) { lastT = c; stalls = 0; return; }
+    if (++stalls >= 4) { clearInterval(t.stall); try { t.pc?.close(); } catch {} connectTile(t); }
+  }, 1000);
+}
+
 function connectTile(t) {
   const myGen = ++t.gen;
+  clearInterval(t.stall);
   whepPlay(`${STREAM_BASE}/${t.flightId}/whep?key=${encodeURIComponent(t.key)}`, t.video)
     .then((p) => {
       if (myGen !== t.gen) { try { p.close(); } catch {} return; }
       t.pc = p;
+      watchTile(t, myGen);
       p.onconnectionstatechange = () => {
         if (myGen !== t.gen) return;
         if (p.connectionState === "connected") t.el.classList.add("live");
@@ -100,7 +118,7 @@ function addTile(s) {
 function removeTile(id) {
   const t = tiles.get(id);
   if (!t) return;
-  t.gen++; try { t.pc?.close(); } catch {}
+  t.gen++; clearInterval(t.stall); try { t.pc?.close(); } catch {}
   t.el.remove();
   tiles.delete(id);
 }

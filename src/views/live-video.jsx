@@ -49,15 +49,30 @@ function LiveVideoFeed({ showAnnotations, flash, duration, flight, recording, pl
   const [state, setState] = lvUseState("connecting"); // connecting | live | waiting
 
   lvUseEffect(() => {
-    let pc, hls, cancelled = false, retry, watchdog;
+    let pc, hls, cancelled = false, retry, watchdog, stallTimer;
     const video = videoRef.current;
     const id = flight?.dbId || flight?.id;
     if (!id || !video) return;
 
-    function markLive() { if (cancelled) return; clearTimeout(watchdog); setState("live"); }
+    function markLive() { if (cancelled) return; clearTimeout(watchdog); setState("live"); watchFrames(); }
+    // Silent-freeze watchdog. A WHEP session can stay "connected" yet stop
+    // rendering new frames (packet loss leaves the decoder waiting for a keyframe),
+    // so the picture freezes while connectionState never reports a problem. Watch
+    // the video clock: if it stops advancing for ~4s while playing, reconnect
+    // cleanly (same path the hard-drop case takes). Works for WHEP and HLS.
+    function watchFrames() {
+      if (stallTimer) return;                              // already watching
+      let lastT = -1, stalls = 0;
+      stallTimer = setInterval(() => {
+        if (cancelled || !video || video.paused || video.ended) { stalls = 0; return; }
+        const t = video.currentTime;
+        if (t > lastT + 0.01) { lastT = t; stalls = 0; return; }  // progressing
+        if (++stalls >= 4) { stalls = 0; teardown(); schedule(); } // frozen → reconnect
+      }, 1000);
+    }
     function schedule() { if (cancelled) return; setState("waiting"); clearTimeout(retry); retry = setTimeout(attempt, 3000); }
     function teardown() {
-      clearTimeout(watchdog);
+      clearTimeout(watchdog); clearInterval(stallTimer); stallTimer = null;
       try { pc && pc.close(); } catch {} try { hls && hls.destroy(); } catch {}
       pc = hls = null;
       if (video) { video.onplaying = null; video.srcObject = null; }
