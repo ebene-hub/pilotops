@@ -196,8 +196,12 @@ export async function bootstrap() {
     LOGBOOK_ENTRIES: logbookRaw.map((l) => {
       const dur = Number(l.duration_min || 0);
       return {
-        id: l.id, pilotId: l.pilot_id, date: l.date, time: "", aircraft: l.aircraft_type, model: l.aircraft_type,
-        area: "", role: "PIC", duration: dur, day: l.night ? 0 : dur, night: l.night ? dur : 0,
+        id: l.id,
+        flightCode: l.flight_id ? (flightCodeById[l.flight_id] || l.flight_id.slice(0, 8)) : "—",
+        flightId: l.flight_id,
+        pilotId: l.pilot_id, pilotName: pilotNameById[l.pilot_id] || "—",
+        date: l.date, time: "", aircraft: l.aircraft_type, model: l.aircraft_type,
+        area: l.notes || "", role: "PIC", duration: dur, day: l.night ? 0 : dur, night: l.night ? dur : 0,
         bvlos: l.bvlos ? dur : 0, vlos: l.bvlos ? 0 : dur, ldgs: 1, mode: l.conditions || "Auto", notes: l.notes,
       };
     }),

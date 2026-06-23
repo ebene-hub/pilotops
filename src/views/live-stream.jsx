@@ -25,12 +25,14 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   const videoBoxRef = lsUseRef(null);
 
   // Public watch link — no login; shows only the livestream + chat.
+  // NOTE: f may be null (empty state) — keep everything here null-safe, the
+  // `if (!f)` guard below renders the empty state.
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const streamLink = (f.dbId && f.shareKey)
+  const streamLink = (f?.dbId && f?.shareKey)
     ? `${origin}/watch.html?f=${f.dbId}&k=${f.shareKey}`
     : `${origin}/`;
   const shareStream = async () => {
-    const payload = { title: `Pilot Ops — ${f.id} live`, text: `Live drone feed: ${f.area}`, url: streamLink };
+    const payload = { title: `Pilot Ops — ${f?.id} live`, text: `Live drone feed: ${f?.area}`, url: streamLink };
     try { if (navigator.share) { await navigator.share(payload); return; } } catch {}
     try { await navigator.clipboard.writeText(streamLink); toast({ kind: "success", title: "Public link copied", msg: "Anyone with this link can watch — no login." }); }
     catch { toast({ kind: "info", title: "Share link", msg: streamLink }); }

@@ -16,31 +16,43 @@ function LogbookView({ accent }) {
   const [entryDetail, setEntryDetail] = lbUseState(null);
   const toast = useToast();
 
-  const filtered = lbUseMemo(() => entries.filter(e => {
+  // Per-pilot filter — defaults to the signed-in pilot if they have entries.
+  const pilots = lbUseMemo(() => [...new Set(entries.map(e => e.pilotName).filter(Boolean))].sort(), [entries]);
+  const [pilotSel, setPilotSel] = lbUseState(
+    (window.__poUser?.name && entries.some(e => e.pilotName === window.__poUser.name)) ? window.__poUser.name : "all"
+  );
+
+  // Pilot-scoped set drives the table, KPIs and charts.
+  const scoped = lbUseMemo(
+    () => (pilotSel === "all" ? entries : entries.filter(e => e.pilotName === pilotSel)),
+    [entries, pilotSel]
+  );
+
+  const filtered = lbUseMemo(() => scoped.filter(e => {
     if (search) {
-      const hay = (e.id + " " + e.aircraft + " " + e.model + " " + e.area + " " + e.role).toLowerCase();
+      const hay = (e.flightCode + " " + e.aircraft + " " + e.model + " " + e.area + " " + e.role).toLowerCase();
       if (!hay.includes(search.toLowerCase())) return false;
     }
     return true;
-  }), [entries, search]);
+  }), [scoped, search]);
 
   const totals = lbUseMemo(() => {
     const monthCut = new Date(); monthCut.setDate(1); monthCut.setHours(0, 0, 0, 0);
     const cut90 = Date.now() - 90 * 86400000;
-    const inMonth = entries.filter(e => e.date && new Date(e.date) >= monthCut);
-    const in90 = entries.filter(e => e.date && new Date(e.date).getTime() >= cut90);
+    const inMonth = scoped.filter(e => e.date && new Date(e.date) >= monthCut);
+    const in90 = scoped.filter(e => e.date && new Date(e.date).getTime() >= cut90);
     return {
-      hours: entries.reduce((s, e) => s + e.duration, 0) / 60,
-      flights: entries.length,
-      night: entries.reduce((s, e) => s + e.night, 0) / 60,
-      bvlos: entries.reduce((s, e) => s + e.bvlos, 0) / 60,
-      ldgs: entries.reduce((s, e) => s + e.ldgs, 0),
+      hours: scoped.reduce((s, e) => s + e.duration, 0) / 60,
+      flights: scoped.length,
+      night: scoped.reduce((s, e) => s + e.night, 0) / 60,
+      bvlos: scoped.reduce((s, e) => s + e.bvlos, 0) / 60,
+      ldgs: scoped.reduce((s, e) => s + e.ldgs, 0),
       monthHours: inMonth.reduce((s, e) => s + e.duration, 0) / 60,
       monthFlights: inMonth.length,
       night90: in90.reduce((s, e) => s + e.night, 0) / 60,
       night90Flights: in90.filter(e => e.night > 0).length,
     };
-  }, [entries]);
+  }, [scoped]);
 
   // Last 12 months — real hours by month.
   const monthly = lbUseMemo(() => {
@@ -49,14 +61,14 @@ function LogbookView({ accent }) {
       const d = new Date(now.getFullYear(), now.getMonth() - (N - 1 - k), 1);
       return { y: d.getFullYear(), m: d.getMonth(), label: d.toLocaleDateString(undefined, { month: "short" }), day: 0, night: 0 };
     });
-    entries.forEach(e => {
+    scoped.forEach(e => {
       if (!e.date) return;
       const d = new Date(e.date);
       const b = buckets.find(x => x.y === d.getFullYear() && x.m === d.getMonth());
       if (b) { b.day += (e.day || 0) / 60; b.night += (e.night || 0) / 60; }
     });
     return buckets.map(b => ({ label: b.label, day: Math.round(b.day * 10) / 10, night: Math.round(b.night * 10) / 10 }));
-  }, [entries]);
+  }, [scoped]);
 
   const maxMonth = Math.max(1, ...monthly.map(m => m.day + m.night));
 
@@ -67,11 +79,11 @@ function LogbookView({ accent }) {
     for (let i = 0; i < 91; i++) {
       const date = new Date(start); date.setDate(start.getDate() + i);
       const key = date.toISOString().slice(0, 10);
-      const minutes = entries.filter(e => e.date && String(e.date).slice(0, 10) === key).reduce((s, e) => s + e.duration, 0);
+      const minutes = scoped.filter(e => e.date && String(e.date).slice(0, 10) === key).reduce((s, e) => s + e.duration, 0);
       days.push({ date, minutes });
     }
     return days;
-  }, [entries]);
+  }, [scoped]);
 
   function exportCSV() {
     const rows = [["Date", "Aircraft", "Model", "Area", "Role", "Duration (min)", "Night", "BVLOS"]];
@@ -234,6 +246,10 @@ function LogbookView({ accent }) {
                      placeholder="Search aircraft, area, ID…"
                      style={{ flex: 1, border: "none", background: "transparent", outline: "none", color: "var(--text)", fontSize: 12.5 }}/>
             </div>
+            <select className="select" value={pilotSel} onChange={e => setPilotSel(e.target.value)} style={{ width: 150, height: 32, fontSize: 12.5 }}>
+              <option value="all">All pilots</option>
+              {pilots.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
             <select className="select" value={range} onChange={e => setRange(e.target.value)} style={{ width: 130, height: 32, fontSize: 12.5 }}>
               <option value="30">Last 30 days</option>
               <option value="90">Last 90 days</option>
@@ -263,7 +279,7 @@ function LogbookView({ accent }) {
               {filtered.map(e => (
                 <tr key={e.id} className="clickable" onClick={() => setEntryDetail(e)}>
                   <td className="mono" style={{ fontSize: 12 }}>{e.date} <span className="muted">· {e.time}</span></td>
-                  <td className="mono" style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)" }}>{e.id}</td>
+                  <td className="mono" style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)" }}>{e.flightCode}</td>
                   <td className="mono" style={{ fontSize: 12 }}>{e.aircraft}<div className="muted" style={{ fontSize: 10.5, fontFamily: "var(--font-sans)" }}>{e.model}</div></td>
                   <td style={{ fontSize: 12.5 }}>{e.area}</td>
                   <td>
@@ -327,7 +343,7 @@ function LogbookView({ accent }) {
 
       {/* Entry detail */}
       {entryDetail && (
-        <Modal open onClose={() => setEntryDetail(null)} title={entryDetail.id} subtitle={`${entryDetail.area} · ${entryDetail.date}`} icon="reports"
+        <Modal open onClose={() => setEntryDetail(null)} title={entryDetail.flightCode} subtitle={`${entryDetail.area || entryDetail.pilotName} · ${entryDetail.date}`} icon="reports"
                footer={<>
                  <button className="btn" onClick={() => setEntryDetail(null)}>Close</button>
                  <button className="btn"><Icon name="edit" size={14}/> Edit</button>
