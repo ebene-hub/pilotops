@@ -2,6 +2,154 @@ import React from "react";
 // Pilot Ops — Post-flight summary (editable + media gallery picker)
 const { useState: seUseState, useEffect: seUseEffect, useRef: seUseRef, useMemo: seUseMemo } = React;
 
+/* ---------- PDF export ----------------------------------------------------
+   Build a self-contained, print-ready A4 report from the pilot's edited
+   summary and print it in an isolated iframe. Printing the live SPA via
+   window.print() produced a blank/clutter page (fixed layout + app print CSS);
+   a standalone document renders the real content as a clean, professional PDF. */
+function seEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function buildReportHtml(f, doc, media, imgUrls) {
+  const pilotName = f?.pilot?.name || (typeof f?.pilot === "string" ? f.pilot : "—");
+  const aircraft = f?.uav ? [f.uav.id, f.uav.model].filter(Boolean).join(" · ") : "—";
+  const station = f?.station?.name || f?.station?.label || "—";
+  const val = (v, suffix = "") => (v && String(v).trim() && v !== "—" ? seEsc(v) + suffix : "—");
+  const coverage = f?.coverageKm > 0 ? f.coverageKm + " km²" : "—";
+  const altitude = f?.altitude > 0 ? f.altitude + " m" : "—";
+  const duration = f?.duration && f.duration !== "00:00:00" ? f.duration : "—";
+
+  const rows = [
+    ["Flight ID", f?.id || "—"],
+    ["Pilot in command", pilotName],
+    ["Aircraft", aircraft],
+    ["Ground station", station],
+    ["Operations area", f?.area || "—"],
+    ["Launch time", f?.started || "—"],
+    ["Flight duration", duration],
+    ["Coverage", coverage],
+    ["Average altitude", altitude],
+    ["Status", (f?.status || "—")],
+  ];
+  const detailHtml = rows.map(([k, v]) => `<div class="d-row"><div class="d-k">${seEsc(k)}</div><div class="d-v">${seEsc(v)}</div></div>`).join("");
+
+  const listHtml = (items, empty) => {
+    const clean = (items || []).filter((x) => x && x.trim());
+    return clean.length ? `<ul>${clean.map((x) => `<li>${seEsc(x)}</li>`).join("")}</ul>` : `<p class="muted">${empty}</p>`;
+  };
+
+  const mediaHtml = media.length
+    ? `<div class="media-grid">${media.map((m) => {
+        const url = imgUrls[m.id];
+        const thumb = url
+          ? `<div class="m-thumb" style="background-image:url('${seEsc(url)}')"></div>`
+          : `<div class="m-thumb m-ph"><span>${seEsc((m.type || "file").toUpperCase())}</span></div>`;
+        const sub = [m.type, m.area, m.flight].filter(Boolean).join(" · ");
+        return `<figure class="m-tile">${thumb}<figcaption><b>${seEsc(m.name)}</b><span>${seEsc(sub)}</span></figcaption></figure>`;
+      }).join("")}</div>`
+    : `<p class="muted">No media attached.</p>`;
+
+  const generated = new Date().toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" });
+
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${seEsc(f?.id || "Flight")} — Post-Flight Summary</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm 18mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #0b1220; font-size: 10.5pt; line-height: 1.5; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .rh { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #1d4ed8; padding-bottom: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .logo { width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg,#2563eb,#1d4ed8);
+    color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; letter-spacing: .5px; }
+  .brand .bt { font-weight: 700; font-size: 15px; }
+  .brand .bs { font-size: 9px; color: #5b6479; text-transform: uppercase; letter-spacing: .09em; margin-top: 1px; }
+  .hm { text-align: right; font-size: 9.5px; color: #5b6479; line-height: 1.6; }
+  .hm b { color: #0b1220; }
+  h1.title { font-size: 21px; margin: 20px 0 2px; letter-spacing: -.01em; }
+  .subtitle { color: #5b6479; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; margin-bottom: 14px; }
+  h2.sec { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: #1d4ed8;
+    border-bottom: 1px solid #e6e8ee; padding-bottom: 5px; margin: 22px 0 10px; }
+  .details { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
+  .d-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid #eef0f4; }
+  .d-k { color: #5b6479; } .d-v { font-weight: 600; text-align: right; }
+  p { margin: 0 0 10px; } ul { margin: 0 0 10px; padding-left: 20px; } li { margin-bottom: 5px; }
+  .muted { color: #8a92a3; font-style: italic; }
+  .media-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .m-tile { margin: 0; border: 1px solid #e6e8ee; border-radius: 8px; overflow: hidden; break-inside: avoid; }
+  .m-thumb { height: 92px; background-size: cover; background-position: center; background-color: #eef1f6;
+    display: flex; align-items: center; justify-content: center; }
+  .m-ph span { font-size: 10px; color: #6b7280; font-weight: 600; letter-spacing: .06em; }
+  figcaption { padding: 6px 8px; }
+  figcaption b { display: block; font-family: ui-monospace, monospace; font-size: 8.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  figcaption span { color: #8a92a3; font-size: 8.5px; }
+  .signoff { margin-top: 22px; padding-top: 12px; border-top: 1px solid #e6e8ee; }
+  .sign-line { margin-top: 30px; display: flex; gap: 44px; }
+  .sign-line .sl { flex: 1; border-top: 1px solid #9aa3b2; padding-top: 4px; font-size: 8.5px; color: #5b6479; text-transform: uppercase; letter-spacing: .05em; }
+  .rf { position: fixed; bottom: 0; left: 0; right: 0; font-size: 8px; color: #9aa3b2; text-align: center; border-top: 1px solid #e6e8ee; padding-top: 4px; }
+  h2.sec, .m-tile, .signoff { break-inside: avoid; }
+</style></head>
+<body>
+  <div class="rh">
+    <div class="brand">
+      <div class="logo">PO</div>
+      <div><div class="bt">Pilot Ops</div><div class="bs">Post-Flight Summary Report</div></div>
+    </div>
+    <div class="hm">Report&nbsp;ID&nbsp;<b>${seEsc(f?.id || "—")}</b><br>Generated&nbsp;<b>${seEsc(generated)}</b></div>
+  </div>
+
+  <h1 class="title">${seEsc(doc.headline || f?.area || "Flight summary")}</h1>
+  <div class="subtitle">${seEsc(doc.meta || "")}</div>
+
+  <h2 class="sec">Flight details</h2>
+  <div class="details">${detailHtml}</div>
+
+  <h2 class="sec">Mission overview</h2>
+  ${doc.intro && doc.intro.trim() ? `<p>${seEsc(doc.intro)}</p>` : `<p class="muted">No overview provided.</p>`}
+
+  <h2 class="sec">Key findings</h2>
+  ${listHtml(doc.findings, "No findings recorded.")}
+
+  <h2 class="sec">Recommended actions</h2>
+  ${listHtml(doc.actions, "No recommended actions.")}
+
+  <h2 class="sec">Attached media (${media.length})</h2>
+  ${mediaHtml}
+
+  <div class="signoff">
+    ${doc.signoff && doc.signoff.trim() ? `<div>${seEsc(doc.signoff)}</div>` : ""}
+    <div class="sign-line">
+      <div class="sl">Pilot in command — signature &amp; date</div>
+      <div class="sl">Reviewed by — signature &amp; date</div>
+    </div>
+  </div>
+
+  <div class="rf">Pilot Ops · Confidential — Internal use only · ${seEsc(f?.id || "")} · Generated ${seEsc(generated)}</div>
+</body></html>`;
+}
+
+// Render the report HTML in a hidden iframe and open the print dialog once any
+// images have loaded (so "Save as PDF" never captures a half-loaded page).
+function printHtml(html) {
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
+  document.body.appendChild(iframe);
+  const idoc = iframe.contentWindow.document;
+  idoc.open(); idoc.write(html); idoc.close();
+  const fire = () => {
+    const imgs = Array.from(idoc.images || []);
+    Promise.all(imgs.map((img) => (img.complete ? Promise.resolve() : new Promise((res) => { img.onload = img.onerror = res; }))))
+      .then(() => {
+        try { iframe.contentWindow.focus(); iframe.contentWindow.print(); } catch {}
+        setTimeout(() => { try { iframe.remove(); } catch {} }, 1500);
+      });
+  };
+  // doc.write tends to leave readyState complete immediately; guard both paths.
+  if (idoc.readyState === "complete") setTimeout(fire, 60); else iframe.onload = fire;
+}
+
 /* ---------- Inline-editable text (contentEditable) ---------- */
 function Editable({ tag = "div", value, onChange, placeholder, style, multiline = false, className }) {
   const ref = seUseRef(null);
@@ -243,7 +391,21 @@ function SummaryEmailView({ flight }) {
     setSending(false);
     toast({ kind: "success", title: "Summary sent", msg: `${recipients.length} recipient${recipients.length === 1 ? "" : "s"} notified.` });
   }
-  function downloadPdf() { window.print(); }
+  async function downloadPdf() {
+    try {
+      toast({ kind: "info", title: "Preparing PDF", msg: "Building the post-flight report…" });
+      const sb = window.__supabase;
+      // Embed real thumbnails for image-type attachments via short-lived signed URLs.
+      const imgUrls = {};
+      await Promise.all(media.map(async (m) => {
+        if (!m.path || !sb || !["photo", "thermal", "map"].includes(m.type)) return;
+        try { const { data } = await sb.storage.from("media").createSignedUrl(m.path, 3600); if (data?.signedUrl) imgUrls[m.id] = data.signedUrl; } catch {}
+      }));
+      printHtml(buildReportHtml(f, doc, media, imgUrls));
+    } catch (e) {
+      toast({ kind: "warn", title: "PDF failed", msg: e?.message || "Could not generate the report." });
+    }
+  }
 
   const storageKey = `po:summary:${f?.id || "none"}`;
   const [doc, setDoc] = seUseState(() => {
