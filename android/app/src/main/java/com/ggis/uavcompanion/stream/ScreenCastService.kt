@@ -40,6 +40,11 @@ class ScreenCastService : Service(), ConnectChecker {
     @Volatile private var polling = false
     @Volatile private var castToken = ""
     @Volatile private var castFlightId = ""
+    // Capture-stall watchdog state. A frozen MediaProjection keeps the stream
+    // "connected" and still emits bytes (forceRender pads the last frame), so the
+    // only field signal is a bitrate that collapses to the static floor.
+    @Volatile private var lastMotionMs = 0L
+    @Volatile private var healsSinceMotion = 0
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -92,9 +97,49 @@ class ScreenCastService : Service(), ConnectChecker {
             polling = true   // we're now "active"; handleDrop will check the flight on any drop
             s.changeVideoSource(ScreenSource(applicationContext, mp))
             s.startStream(url)
+            lastMotionMs = System.currentTimeMillis(); healsSinceMotion = 0
             startEndWatch(token, flightId)
+            startStallWatch()
         } catch (e: Exception) {
             CastBus.emit(CastStatus.Failed(e.message ?: "Could not start cast")); stopCast()
+        }
+    }
+
+    // Detect a wedged screen capture (frames stopped updating while the encoder
+    // keeps padding the last frame) and self-heal by rebuilding the capture surface
+    // — no pilot action, no viewer refresh. For live drone ops the cast normally
+    // has motion, so a bitrate stuck at the static floor for STALL_MS means frozen.
+    private fun startStallWatch() {
+        thread {
+            while (polling) {
+                try { Thread.sleep(3000) } catch (_: InterruptedException) {}
+                if (!polling) break
+                val idle = System.currentTimeMillis() - lastMotionMs
+                // One heal per stall episode; re-armed only once real motion returns
+                // (healsSinceMotion is reset in onNewBitrate). So a genuinely static
+                // but healthy screen costs at most one harmless refresh, not a loop.
+                if (idle > STALL_MS && healsSinceMotion == 0) {
+                    healsSinceMotion++
+                    lastMotionMs = System.currentTimeMillis()
+                    healCapture()
+                }
+            }
+        }
+    }
+
+    private fun healCapture() {
+        val mp = projection ?: return
+        mainHandler.post {
+            try {
+                val s = stream ?: return@post
+                if (s.isStreaming) {
+                    // Rebuild the MediaProjection VirtualDisplay on the same projection;
+                    // a stalled capture resumes when the surface is recreated. With
+                    // iFrameInterval = 1 a fresh keyframe follows within ~1s, so every
+                    // viewer recovers without refreshing.
+                    s.changeVideoSource(ScreenSource(applicationContext, mp))
+                }
+            } catch (_: Exception) {}
         }
     }
 
@@ -132,8 +177,13 @@ class ScreenCastService : Service(), ConnectChecker {
 
     // ---- ConnectChecker ----
     override fun onConnectionStarted(url: String) { CastBus.emit(CastStatus.Connecting) }
-    override fun onConnectionSuccess() { CastBus.emit(CastStatus.Live(0)) }
-    override fun onNewBitrate(bitrate: Long) { CastBus.emit(CastStatus.Live(bitrate / 1000)) }
+    override fun onConnectionSuccess() { lastMotionMs = System.currentTimeMillis(); healsSinceMotion = 0; CastBus.emit(CastStatus.Live(0)) }
+    override fun onNewBitrate(bitrate: Long) {
+        // Bitrate above the static floor = the capture is delivering fresh frames →
+        // mark motion and re-arm the stall watchdog.
+        if (bitrate > MOTION_FLOOR_BPS) { lastMotionMs = System.currentTimeMillis(); healsSinceMotion = 0 }
+        CastBus.emit(CastStatus.Live(bitrate / 1000))
+    }
     override fun onConnectionFailed(reason: String) { handleDrop(reason, failed = true) }
     override fun onDisconnect() { handleDrop(null, failed = false) }
     override fun onAuthError() { handleDrop("Stream auth rejected", failed = true) }
@@ -192,6 +242,10 @@ class ScreenCastService : Service(), ConnectChecker {
         private const val NOTIF_ID = 42
         private const val FPS = 30
         private const val BITRATE = 2_500_000
+        // Below this the encoder is almost certainly re-sending a static/frozen
+        // frame; sustained for STALL_MS we rebuild the capture surface.
+        private const val MOTION_FLOOR_BPS = 350_000L
+        private const val STALL_MS = 12_000L
 
         fun start(ctx: Context, resultCode: Int, data: Intent, url: String, token: String, flightId: String) {
             val i = Intent(ctx, ScreenCastService::class.java).apply {
