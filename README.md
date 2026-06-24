@@ -25,8 +25,9 @@ npm run build    # production bundle into dist/
   the global shapes the views read, then mounts (no dummy data; empty until used).
 - `src/main.jsx` / `src/admin-main.jsx` — session gates (redirect to login if no
   session; admin requires `is_admin`).
-- `src/login.js` / `src/admin-login.js` — real password auth, admin TOTP 2FA, and
-  the invite-accept + one-time pilot-code flow.
+- `src/login.js` / `src/admin-login.js` — real password auth, admin TOTP 2FA,
+  forgot-password (email reset link → set-new-password), and the invite-accept +
+  one-time pilot-code flow.
 - `supabase/` — schema migrations, RLS, security-definer RPCs (pilot-code verify
   with server-side lockout, invite accept, emergency rate-limit), and config seed.
 - `Dockerfile`, `docker-compose.yml`, `docker/`, `scripts/bootstrap-admin.mjs` —
@@ -70,7 +71,13 @@ operator dashboard and a public watch page, with sub-second (WebRTC) latency.
   recordings (size-capped, with retention cleanup).
 - **Public watch page** (`watch.html` / `src/watch.js`) — no-login, Teams-style
   multi-screen gallery. An org's **permanent watch link** auto-follows whatever
-  missions are live (per-tile maximize + focused read-only/guest chat).
+  missions are live (per-tile maximize **and** minimize-to-dock + focused
+  read-only/guest chat).
+- **Silent-freeze self-heal** — both the in-app player and the watch-page tiles run
+  a watchdog that detects a stalled video clock (a WebRTC session that stays
+  "connected" but stops rendering) and auto-reconnects. On the publisher side, the
+  Android app watches for a wedged MediaProjection capture (bitrate stuck at the
+  static floor) and rebuilds the capture in place to recover the picture.
 - **Direct drone ingest API** — for non-DJI craft with no Android controller, each
   flight exposes a short **ingest key** so any encoder/ground station (OBS, etc.) can
   push `rtmp://<host>:1935/<flightId>?key=<key>` or the SRT equivalent. Surfaced in
@@ -109,7 +116,7 @@ The full Pilot Ops operator app and its views:
 | Operations  | Start mission (embedded pre-flight checklist + 6-digit pilot-code auth) |
 | Operations  | Live stream (real WHEP video, per-mission record toggle, share + direct-ingest) |
 | Operations  | Multi-screen ops         |
-| Operations  | Post-flight summary (editable, attach media from gallery) |
+| Operations  | Post-flight summary (editable, real KPIs/attachments, professional PDF export) |
 | Fleet       | Aircraft and Batteries   |
 | Storage     | Media gallery            |
 | Logging     | Pilot logbook (auto-filled from flights, per-pilot filter, readable flight codes) |
@@ -195,8 +202,11 @@ The Pilot Ops dashboard and the Admin console share `data.js`, `shared.jsx`,
   per-mission toggle is on) upload to Storage and attach to the flight. The pipeline
   runs on an AWS EC2 box (MediaMTX + stream-gateway + Caddy); see DEPLOY.md and
   `deploy/stream-server/` for bring-up and redeploy.
-- **Remaining v1 limitations** (documented in DEPLOY.md): **email** for
-  invites/notifications is stub-and-logged to the `notifications` table (no SMTP yet);
+- **Remaining v1 limitations** (documented in DEPLOY.md): transactional **auth
+  email** (password reset, magic links) is sent by Supabase Auth — configure a custom
+  SMTP sender and add the `/login.html` / `/admin-login.html` redirect URLs in the
+  dashboard for production. In-app **invite/notification email** is still
+  stub-and-logged to the `notifications` table (no app-side SMTP yet);
   the long-term **video storage backend** is not yet finalized (small clips go to the
   gallery, large ones are purged after 7 days pending an S3-class decision), and
   auto-recording is off by default in favor of the manual per-mission toggle.
