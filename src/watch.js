@@ -18,7 +18,7 @@ const singleKey = params.get("k") || "";
 const watchKey = params.get("org") || "";
 
 const $ = (id) => document.getElementById(id);
-const grid = $("grid"), waiting = $("waiting"), liveBadge = $("liveBadge");
+const grid = $("grid"), waiting = $("waiting"), liveBadge = $("liveBadge"), dock = $("dock");
 
 // Chat targets whichever tile is focused.
 let flightId = "", key = "";
@@ -90,6 +90,7 @@ function connectTile(t) {
 }
 
 const MAX_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/></svg>`;
+const MIN_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="19" x2="19" y2="19"/></svg>`;
 
 function addTile(s) {
   const el = document.createElement("div");
@@ -97,22 +98,49 @@ function addTile(s) {
   el.innerHTML =
     `<video autoplay muted playsinline></video>` +
     `<div class="tile-wait"><span class="dot"></span>Connecting…</div>` +
+    `<button class="tile-min" title="Minimize this feed" aria-label="Minimize this feed">${MIN_ICON}</button>` +
     `<button class="tile-max" title="Maximize this feed" aria-label="Maximize this feed">${MAX_ICON}</button>` +
     `<div class="tile-label"><span class="livedot"></span><b>${escapeHtml(s.code || "Live")}</b>` +
     `<span class="area">${escapeHtml(s.area || "")}${s.pilot ? " · " + escapeHtml(s.pilot) : ""}</span></div>`;
   const t = { el, video: el.querySelector("video"), pc: null, gen: 0,
     flightId: s.flight, key: s.key, label: s.code || "Live" };
-  el.addEventListener("click", () => setFocus(t.flightId));
+  // A minimized tile lives in the dock as a live thumbnail; clicking it restores.
+  el.addEventListener("click", () => {
+    if (el.classList.contains("minimized")) restoreTile(t); else setFocus(t.flightId);
+  });
   // Maximize just this feed (fullscreen the tile); don't also trigger focus.
   el.querySelector(".tile-max").addEventListener("click", (e) => {
     e.stopPropagation();
     if (document.fullscreenElement) document.exitFullscreen?.();
     else el.requestFullscreen?.();
   });
+  el.querySelector(".tile-min").addEventListener("click", (e) => {
+    e.stopPropagation(); minimizeTile(t);
+  });
   tiles.set(s.flight, t);
   grid.appendChild(el);
   connectTile(t);
   return t;
+}
+
+// Collapse a feed into the dock (keeps streaming as a thumbnail) and restore it.
+function minimizeTile(t) {
+  if (t.el.classList.contains("minimized")) return;
+  t.el.classList.add("minimized");
+  t.el.title = "Tap to restore";
+  dock.appendChild(t.el);
+  if (focusId === t.flightId) {
+    const other = [...tiles.values()].find((x) => !x.el.classList.contains("minimized"));
+    setFocus(other ? other.flightId : null);
+  }
+  layoutGrid();
+}
+function restoreTile(t) {
+  t.el.classList.remove("minimized");
+  t.el.removeAttribute("title");
+  grid.appendChild(t.el);
+  setFocus(t.flightId);
+  layoutGrid();
 }
 
 function removeTile(id) {
@@ -141,8 +169,15 @@ function setFocus(id) {
 }
 
 function layoutGrid() {
-  grid.classList.toggle("single", tiles.size <= 1);
-  waiting.style.display = tiles.size ? "none" : "grid";
+  let visible = 0;
+  for (const t of tiles.values()) if (!t.el.classList.contains("minimized")) visible++;
+  grid.classList.toggle("single", visible <= 1);
+  if (tiles.size && !visible) {
+    waiting.style.display = "grid";
+    waiting.innerHTML = `<div class="inner">All feeds minimized — tap a thumbnail above to restore.</div>`;
+  } else {
+    waiting.style.display = tiles.size ? "none" : "grid";
+  }
   liveBadge.classList.toggle("on", tiles.size > 0);
 }
 
