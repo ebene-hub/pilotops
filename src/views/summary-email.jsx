@@ -11,7 +11,7 @@ function seEsc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function buildReportHtml(f, doc, media, imgUrls) {
+function buildReportHtml(f, doc, media, imgUrls, incidentCount = 0) {
   const pilotName = f?.pilot?.name || (typeof f?.pilot === "string" ? f.pilot : "—");
   const aircraft = f?.uav ? [f.uav.id, f.uav.model].filter(Boolean).join(" · ") : "—";
   const station = f?.station?.name || f?.station?.label || "—";
@@ -30,6 +30,7 @@ function buildReportHtml(f, doc, media, imgUrls) {
     ["Flight duration", duration],
     ["Coverage", coverage],
     ["Average altitude", altitude],
+    ["Incidents logged", incidentCount > 0 ? String(incidentCount) : "None"],
     ["Status", (f?.status || "—")],
   ];
   const detailHtml = rows.map(([k, v]) => `<div class="d-row"><div class="d-k">${seEsc(k)}</div><div class="d-v">${seEsc(v)}</div></div>`).join("");
@@ -401,7 +402,7 @@ function SummaryEmailView({ flight }) {
         if (!m.path || !sb || !["photo", "thermal", "map"].includes(m.type)) return;
         try { const { data } = await sb.storage.from("media").createSignedUrl(m.path, 3600); if (data?.signedUrl) imgUrls[m.id] = data.signedUrl; } catch {}
       }));
-      printHtml(buildReportHtml(f, doc, media, imgUrls));
+      printHtml(buildReportHtml(f, doc, media, imgUrls, flightIncidents.length));
     } catch (e) {
       toast({ kind: "warn", title: "PDF failed", msg: e?.message || "Could not generate the report." });
     }
@@ -428,6 +429,18 @@ function SummaryEmailView({ flight }) {
   const formatBytes = window.formatBytes || (b => b);
 
   const media = doc.mediaIds.map(id => library.find(m => m.id === id)).filter(Boolean);
+
+  // Real incidents logged against this flight (matched on the flight UUID).
+  const flightIncidents = (window.INCIDENTS || []).filter(i => i.flightId && f && i.flightId === f.dbId);
+
+  // Download a real attachment from the private media bucket via a signed URL.
+  async function downloadMedia(m) {
+    const sb = window.__supabase;
+    if (!m?.path || !sb) { toast({ kind: "warn", title: "No file", msg: "This attachment has no stored file." }); return; }
+    const { data, error } = await sb.storage.from("media").createSignedUrl(m.path, 3600, { download: m.name });
+    if (error || !data?.signedUrl) { toast({ kind: "warn", title: "Download failed", msg: error?.message || "Could not get a link." }); return; }
+    window.open(data.signedUrl, "_blank");
+  }
 
   function setField(k, v) {
     setDoc(prev => ({ ...prev, [k]: v }));
@@ -573,10 +586,10 @@ function SummaryEmailView({ flight }) {
                   {/* KPI strip */}
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, margin: "20px 0", padding: 14, background: "#f7f8fa", borderRadius: 10, border: "1px solid #e6e8ee" }}>
                     {[
-                      ["Coverage", (f.coverageKm ?? "—") + " km²"],
-                      ["Avg altitude", f.altitude + " m"],
-                      ["Incidents", "2 flagged"],
-                      ["Footage", "48m 12s"],
+                      ["Coverage", f.coverageKm > 0 ? f.coverageKm + " km²" : "—"],
+                      ["Avg altitude", f.altitude > 0 ? f.altitude + " m" : "—"],
+                      ["Flight time", f.duration && f.duration !== "00:00:00" ? f.duration : "—"],
+                      ["Incidents", flightIncidents.length ? flightIncidents.length + " flagged" : "None"],
                     ].map(([k, v]) => (
                       <div key={k}>
                         <div style={{ fontSize: 10, color: "#7a8294", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 500 }}>{k}</div>
@@ -730,10 +743,8 @@ function SummaryEmailView({ flight }) {
             <div className="card-head"><div className="card-title">Attachments</div></div>
             <div style={{ padding: 8 }}>
               {[
-                { ic: "doc", name: f.id + "_summary.pdf", size: "1.4 MB" },
-                { ic: "video", name: f.id + "_recording.mp4", size: "284 MB", note: "Encrypted link" },
-                { ic: "doc", name: "telemetry_log.csv", size: "82 KB" },
-                ...media.slice(0, 3).map(m => ({ ic: TYPE_META[m.type]?.icon || "image", name: m.name, size: formatBytes(m.size), note: "From gallery" })),
+                { ic: "doc", name: `${f.id}_summary.pdf`, size: "Generated on download", onClick: downloadPdf },
+                ...media.map(m => ({ ic: TYPE_META[m.type]?.icon || "image", name: m.name, size: formatBytes(m.size), note: "From gallery", onClick: () => downloadMedia(m) })),
               ].map(a => (
                 <div key={a.name} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 10px", borderRadius: 8 }}>
                   <div style={{ width: 28, height: 28, borderRadius: 6, background: "var(--accent-soft)", color: "var(--accent)", display: "grid", placeItems: "center" }}><Icon name={a.ic} size={13}/></div>
@@ -741,9 +752,14 @@ function SummaryEmailView({ flight }) {
                     <div className="mono" style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
                     <div className="muted" style={{ fontSize: 10.5 }}>{a.size}{a.note ? " · " + a.note : ""}</div>
                   </div>
-                  <button className="iconbtn" style={{ width: 24, height: 24 }}><Icon name="download" size={12}/></button>
+                  <button className="iconbtn" style={{ width: 24, height: 24 }} onClick={a.onClick} title="Download"><Icon name="download" size={12}/></button>
                 </div>
               ))}
+              {media.length === 0 && (
+                <div className="muted" style={{ fontSize: 11.5, padding: "4px 10px 8px", lineHeight: 1.5 }}>
+                  Only the summary PDF so far. Add photos, video or maps from the gallery to attach them here.
+                </div>
+              )}
             </div>
           </div>
 
@@ -752,10 +768,10 @@ function SummaryEmailView({ flight }) {
             <div className="card-head"><div className="card-title">Pre-send checklist</div></div>
             <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {[
-                ["Flight log closed", true],
-                ["Incidents reviewed (2)", true],
+                ["Flight log closed", f.status === "completed"],
+                [`Incidents reviewed (${flightIncidents.length})`, true],
                 ["Media reviewed", media.length > 0],
-                ["Recipients confirmed", true],
+                ["Recipients confirmed", recipients.length > 0],
               ].map(([k, done]) => (
                 <div key={k} style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 12.5 }}>
                   <div style={{

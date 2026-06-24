@@ -141,6 +141,7 @@ export async function bootstrap() {
     id: i.code || i.id, dbId: i.id, type: i.type, severity: i.severity, place: i.place,
     reporter: i.reporter?.full_name || "—", date: dateLabel(i.created_at),
     lat: i.lat, lng: i.lng, status: i.status, description: i.description,
+    flightId: i.flight_id || null,
   }));
 
   const reports = reportsRaw.map((r) => ({
