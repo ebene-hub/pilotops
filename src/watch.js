@@ -208,11 +208,15 @@ function relTime(ts) {
 function renderChat(msgs) {
   const box = $("msgs");
   if (!msgs.length) { box.innerHTML = '<div class="empty">No messages yet.</div>'; return; }
-  box.innerHTML = msgs.map((m) => `
-    <div class="msg ${m.role === "guest" ? "guest" : ""}">
-      <div class="who">${escapeHtml(m.from || "Crew")}<span class="time">${relTime(m.at)}</span></div>
+  const me = localStorage.getItem("po:watch:name") || "";
+  box.innerHTML = msgs.map((m) => {
+    const mine = me && m.from === me;                       // sender (you) vs receiver (others)
+    return `
+    <div class="msg ${m.role === "guest" ? "guest" : ""} ${mine ? "me" : ""}">
+      <div class="who">${mine ? "You" : escapeHtml(m.from || "Crew")}<span class="time">${relTime(m.at)}</span></div>
       <div class="text">${escapeHtml(m.text || "")}</div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   box.scrollTop = box.scrollHeight;
 }
 async function pollChatOnce() {
@@ -242,6 +246,35 @@ function wireSend() {
   });
 }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+// ---- Emoji picker for the guest chat ----------------------------------------
+const WATCH_EMOJIS = ["👍","✅","❌","⚠️","🚁","🛰️","📍","👀","🎯","🔥","🟢","🔴","🆗","🙏","👏","🚨","😅","💪","🫡","❤️"];
+function wireEmoji() {
+  const btn = $("emojiBtn"), pop = $("emojiPop"), input = $("chatinput");
+  if (!btn || !pop || !input) return;
+  pop.innerHTML = WATCH_EMOJIS.map((e) => `<button type="button">${e}</button>`).join("");
+  btn.addEventListener("click", (e) => { e.preventDefault(); pop.classList.toggle("open"); });
+  pop.addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    input.value += b.textContent; input.focus(); pop.classList.remove("open");
+  });
+  input.addEventListener("focus", () => pop.classList.remove("open"));
+  document.addEventListener("click", (e) => { if (e.target !== btn && !pop.contains(e.target)) pop.classList.remove("open"); });
+}
+
+// ---- Live viewer count (realtime presence) ----------------------------------
+// Everyone on this page (incl. no-login guests) joins a presence room; the count
+// of present members is the number of people currently watching.
+function joinPresence() {
+  const room = watchKey ? `watch-org:${watchKey}` : (singleFlight ? `watch-flight:${singleFlight}` : "");
+  if (!room) return;
+  const myKey = Math.random().toString(36).slice(2);
+  const ch = sb.channel(room, { config: { presence: { key: myKey } } });
+  ch.on("presence", { event: "sync" }, () => {
+    const n = Object.keys(ch.presenceState()).length;
+    const el = $("viewerCount"); if (el) el.textContent = String(Math.max(1, n));
+  }).subscribe(async (st) => { if (st === "SUBSCRIBED") await ch.track({ at: Date.now() }); });
+}
 
 // Teams-style controls: fullscreen + collapsible chat.
 function wireUi() {
@@ -280,6 +313,8 @@ async function orgTick() {
 // ---- init -------------------------------------------------------------------
 wireUi();
 wireSend();
+wireEmoji();
+joinPresence();
 chatLoop();
 
 (async () => {

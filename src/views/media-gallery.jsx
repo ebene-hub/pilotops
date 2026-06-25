@@ -199,8 +199,17 @@ function MediaGalleryView({ accent }) {
   const [uploadOpen, setUploadOpen] = mgUseState(false);
   const [media, setMedia] = mgUseState(MEDIA_LIBRARY);
   const [dragHover, setDragHover] = mgUseState(false);
+  const [linkFlight, setLinkFlight] = mgUseState("");   // dbId of flight to attach uploads to ("" = unlinked)
   const fileRef = mgUseRef(null);
   const toast = useToast();
+
+  // Real flights the upload can be linked to (active first, then recent).
+  const linkableFlights = mgUseMemo(() => {
+    const seen = new Set();
+    return [...(window.ACTIVE_FLIGHTS || []), ...(window.RECENT_FLIGHTS || [])]
+      .filter(f => f.dbId && !seen.has(f.dbId) && seen.add(f.dbId))
+      .map(f => ({ dbId: f.dbId, code: f.id, area: f.area, live: (window.ACTIVE_FLIGHTS || []).some(a => a.dbId === f.dbId) }));
+  }, []);
 
   const pilots = mgUseMemo(() => Array.from(new Set(MEDIA_LIBRARY.map(m => m.pilot))).sort(), []);
 
@@ -221,12 +230,41 @@ function MediaGalleryView({ accent }) {
   }, [media]);
 
   const totalBytes = mgUseMemo(() => media.reduce((s, m) => s + (m.size || 0), 0), [media]);
-  const quotaBytes = 8 * 1e12; // 8 TB plan
-  const usedPct = (totalBytes / quotaBytes) * 100;
+  const [storageNum, storageUnit] = formatBytes(totalBytes).split(" ");
+  const videoBytes = mgUseMemo(() => media.filter(m => m.type === "video").reduce((s, m) => s + (m.size || 0), 0), [media]);
   const uploadedToday = mgUseMemo(() => {
     const t = new Date(); t.setHours(0, 0, 0, 0);
     return media.filter(m => m.createdAt && new Date(m.createdAt) >= t).length;
   }, [media]);
+
+  // Keep the gallery live/correct: re-fetch the real media rows whenever this view
+  // opens, so screenshots/recordings captured during a flight show up immediately
+  // (the sign-in snapshot in MEDIA_LIBRARY may predate them).
+  mgUseEffect(() => {
+    const sb = window.__supabase; if (!sb) return;
+    let cancelled = false;
+    const flights = [...(window.ACTIVE_FLIGHTS || []), ...(window.RECENT_FLIGHTS || [])];
+    const codeById = {}, pilotByFlight = {};
+    flights.forEach(f => { if (f.dbId) { codeById[f.dbId] = f.id; pilotByFlight[f.dbId] = f.pilot?.name; } });
+    const rel = (iso) => {
+      if (!iso) return "—";
+      const d = Date.now() - new Date(iso).getTime();
+      if (d < 6e4) return "just now";
+      if (d < 36e5) return Math.floor(d / 6e4) + " min ago";
+      if (d < 864e5) return Math.floor(d / 36e5) + "h ago";
+      return new Date(iso).toLocaleDateString();
+    };
+    sb.from("media").select("*").order("created_at", { ascending: false }).then(({ data }) => {
+      if (cancelled || !data) return;
+      setMedia(data.map(m => ({
+        id: m.id, shortId: m.id ? m.id.slice(0, 8).toUpperCase() : "", name: m.name, type: m.type, size: m.size, dur: m.duration,
+        pilot: pilotByFlight[m.flight_id] || (m.pilot_id && m.pilot_id === window.__poUser?.id ? window.__poUser?.name : null) || "—",
+        flight: m.flight_id ? (codeById[m.flight_id] || "—") : "—", flightId: m.flight_id,
+        area: m.area, date: rel(m.created_at), createdAt: m.created_at, tags: m.tags || [], starred: m.starred, path: m.storage_path,
+      })));
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   function exportCsv() {
     const rows = [["Name", "Type", "Size (bytes)", "Flight", "Area", "Captured", "Starred"]];
@@ -247,24 +285,22 @@ function MediaGalleryView({ accent }) {
     const added = [];
     for (const f of Array.from(files)) {
       const ext = (f.name.split(".").pop() || "").toLowerCase();
-      let type = "photo";
-      if (["mp4","mov","webm","avi"].includes(ext)) type = "video";
-      else if (["tif","tiff"].includes(ext) && f.name.includes("thermal")) type = "thermal";
-      else if (["las","laz","ply"].includes(ext)) type = "lidar";
-      else if (["geotiff"].includes(ext)) type = "map";
+      const type = ["mp4","mov","webm","avi","mkv"].includes(ext) ? "video" : "photo";
 
       const path = `${uid || "anon"}/${Date.now()}_${f.name}`;
       const up = await sb.storage.from("media").upload(path, f, { upsert: false });
       if (up.error) { toast({ kind: "warn", title: "Upload failed", msg: `${f.name}: ${up.error.message}` }); continue; }
 
+      const linked = linkableFlights.find(x => x.dbId === linkFlight) || null;
       const { data: row, error } = await sb.from("media").insert({
         storage_path: path, name: f.name, type, size: f.size,
-        pilot_id: uid, area: null, tags: ["uploaded"],
+        pilot_id: uid, flight_id: linked?.dbId || null, area: linked?.area || null, tags: ["uploaded"],
       }).select().single();
       if (error) { toast({ kind: "warn", title: "Save failed", msg: error.message }); continue; }
 
       added.push({ id: row.id, name: f.name, type, size: f.size, dur: undefined,
-        pilot: uid, flight: null, area: null, date: "just now", tags: ["uploaded"], starred: false, path, _new: true });
+        pilot: window.__poUser?.name || "—", flight: linked?.code || "—", flightId: linked?.dbId || null,
+        area: linked?.area || null, date: "just now", tags: ["uploaded"], starred: false, path, _new: true });
     }
     if (added.length) {
       setMedia(prev => [...added, ...prev]);
@@ -301,7 +337,7 @@ function MediaGalleryView({ accent }) {
       <div className="page-head">
         <div>
           <h1 className="page-title">Media gallery</h1>
-          <div className="page-sub">{media.length.toLocaleString()} files · {formatBytes(totalBytes)} of {formatBytes(quotaBytes)} used</div>
+          <div className="page-sub">{media.length.toLocaleString()} files · {formatBytes(totalBytes)} stored</div>
         </div>
         <div className="page-actions">
           {showPilotFilter && (
@@ -321,17 +357,16 @@ function MediaGalleryView({ accent }) {
         <div className="kpi">
           <div className="kpi-label"><span>Storage used</span></div>
           <div className="kpi-value">
-            <span style={{ fontVariantNumeric: "tabular-nums" }}>{(totalBytes / 1e12).toFixed(2)}</span>
-            <span className="unit">/ 8 TB</span>
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>{storageNum}</span>
+            <span className="unit">{storageUnit}</span>
           </div>
-          <div style={{ marginTop: 12, height: 6, borderRadius: 3, background: "var(--bg-muted)", overflow: "hidden" }}>
-            <div style={{ width: `${Math.min(100, usedPct)}%`, height: "100%", background: usedPct > 80 ? "var(--warning)" : "var(--accent)", borderRadius: 3 }}/>
+          <div className="kpi-delta" style={{ color: "var(--text-3)", marginTop: 6 }}>
+            {formatBytes(videoBytes)} video · across {media.length.toLocaleString()} file{media.length === 1 ? "" : "s"}
           </div>
-          <div className="kpi-delta" style={{ color: "var(--text-3)", marginTop: 6 }}>{usedPct.toFixed(1)}% of plan</div>
         </div>
         <KpiTile label="Total media" value={media.length.toLocaleString()} unit="files" delta={`${uploadedToday} today`} trend="up" spark={Array(7).fill(media.length)}/>
         <KpiTile label="Uploaded today" value={String(uploadedToday)} unit="files" trend="up" spark={Array(7).fill(uploadedToday)} color="var(--success)"/>
-        <KpiTile label="Linked to flights" value={`${media.length ? Math.round((media.filter(m => m.flight).length / media.length) * 100) : 0}`} unit="%" trend="up" spark={Array(7).fill(media.filter(m => m.flight).length)} color="#7c3aed"/>
+        <KpiTile label="Linked to flights" value={`${media.length ? Math.round((media.filter(m => m.flightId).length / media.length) * 100) : 0}`} unit="%" trend="up" spark={Array(7).fill(media.filter(m => m.flightId).length)} color="#7c3aed"/>
       </div>
 
       {/* Upload drop zone */}
@@ -363,12 +398,8 @@ function MediaGalleryView({ accent }) {
             {dragHover ? "Release to upload" : "Drop files here, or click to browse"}
           </div>
           <div style={{ fontSize: 12, color: "var(--text-3)" }}>
-            Photos · Video (MP4, MOV) · Thermal (TIFF) · LiDAR (LAS, LAZ) · GeoTIFF. Max 5 GB / file. Auto-linked to your active flight.
+            Photos (JPG, PNG) · Video (MP4, MOV, WebM). Max 5 GB / file. Stored to your org's media gallery.
           </div>
-        </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          <span className="badge"><Icon name="link" size={10}/> FL-2240</span>
-          <span className="badge"><Icon name="pin" size={10}/> North Perimeter</span>
         </div>
       </div>
 
@@ -380,9 +411,6 @@ function MediaGalleryView({ accent }) {
               { k: "all",     l: "All",     ic: "folder" },
               { k: "photo",   l: "Photos",  ic: "image" },
               { k: "video",   l: "Video",   ic: "video" },
-              { k: "thermal", l: "Thermal", ic: "fire" },
-              { k: "lidar",   l: "LiDAR",   ic: "layers" },
-              { k: "map",     l: "Maps",    ic: "pin" },
             ].map(o => (
               <button key={o.k}
                 className={"tab " + (typeFilter === o.k ? "active" : "")}
@@ -587,7 +615,7 @@ function MediaGalleryView({ accent }) {
 
       {/* Upload modal */}
       {uploadOpen && (
-        <Modal open onClose={() => setUploadOpen(false)} title="Upload media" subtitle="Files will be linked to your active flight FL-2240 · North Perimeter" icon="upload"
+        <Modal open onClose={() => setUploadOpen(false)} title="Upload media" subtitle={linkFlight ? `Linking to ${(linkableFlights.find(f => f.dbId === linkFlight)?.code) || "flight"} · ${linkableFlights.find(f => f.dbId === linkFlight)?.area || ""}` : "Files are stored in your org's media gallery"} icon="upload"
                footer={
                  <>
                    <button className="btn" onClick={() => setUploadOpen(false)}>Cancel</button>
@@ -598,12 +626,11 @@ function MediaGalleryView({ accent }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <div className="field">
                 <label className="field-label">Link to flight</label>
-                <select className="select" defaultValue="FL-2240">
-                  <option>FL-2240 · North Perimeter (active)</option>
-                  <option>FL-2241 · Sector 7 Sweep</option>
-                  <option>FL-2242 · Quay 3 Inspection</option>
-                  <option>FL-2243 · Ridge 4 Sweep</option>
-                  <option>Unlinked</option>
+                <select className="select" value={linkFlight} onChange={e => setLinkFlight(e.target.value)}>
+                  <option value="">Unlinked</option>
+                  {linkableFlights.map(f => (
+                    <option key={f.dbId} value={f.dbId}>{f.code} · {f.area}{f.live ? " (live)" : ""}</option>
+                  ))}
                 </select>
               </div>
               <div className="field">
@@ -634,7 +661,7 @@ function MediaGalleryView({ accent }) {
                 <Icon name="upload" size={24}/>
               </div>
               <div style={{ fontSize: 14, fontWeight: 600, marginTop: 12 }}>Drag files here, or click to browse</div>
-              <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 4 }}>JPG · PNG · MP4 · MOV · TIF · LAS · LAZ · GeoTIFF — up to 5 GB each</div>
+              <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 4 }}>JPG · PNG · MP4 · MOV · WebM — up to 5 GB each</div>
             </div>
             <div style={{ display: "flex", gap: 14, padding: 12, background: "var(--accent-soft)", borderRadius: 8, color: "var(--accent)", fontSize: 12.5, alignItems: "flex-start" }}>
               <Icon name="shield" size={16}/>

@@ -5,6 +5,9 @@ import { refresh } from "../store.jsx";
 // Pilot Ops — Live Stream viewer (single pilot) — telemetry, chat, screenshot, AI annotations
 const { useState: lsUseState, useEffect: lsUseEffect, useRef: lsUseRef } = React;
 
+// Quick-pick emojis for mission chat (no external picker dependency).
+const CHAT_EMOJIS = ["👍","✅","❌","⚠️","🚁","🛰️","📍","👀","🎯","🔥","📸","🟢","🔴","🆗","🙏","👏","🚨","😅","💪","🫡"];
+
 function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   // Only show a flight that's genuinely in the live list (don't trust a passed
   // flight's possibly-stale status). Else the first active flight, else nothing
@@ -16,8 +19,11 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   const [pos, setPos] = lsUseState(null);
   const [online, setOnline] = lsUseState(1);
   const [draft, setDraft] = lsUseState("");
-  const [recording, setRecording] = lsUseState(false); // per-mission, off by default
-  const [recordBusy, setRecordBusy] = lsUseState(false);
+  const [emojiOpen, setEmojiOpen] = lsUseState(false);
+  const [recording, setRecording] = lsUseState(false); // client-side clip recorder
+  const mediaRecRef = lsUseRef(null);
+  const recChunksRef = lsUseRef([]);
+  const recStartRef = lsUseRef(0);
   const [showAnnotations, setShowAnnotations] = lsUseState(true);
   const [flash, setFlash] = lsUseState(false);
   const [screenshots, setScreenshots] = lsUseState([]);
@@ -47,8 +53,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
     catch { toast({ kind: "info", title: "Share link", msg: streamLink }); }
   };
 
-  // Per-mission recording — recording is off by default on the server; this
-  // toggles it for THIS flight via the stream gateway (same host as the feed).
+  // Stream origin (same host as the feed) — used to derive the direct-ingest host.
   const gatewayBase = (() => {
     try { return new URL(import.meta.env.VITE_STREAM_URL || origin, origin).origin; }
     catch { return origin; }
@@ -58,31 +63,44 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   const rtmpIngest = (f?.dbId && f?.ingestKey) ? `rtmp://${streamHost}:1935/${f.dbId}?key=${f.ingestKey}` : "";
   const srtIngest = (f?.dbId && f?.ingestKey) ? `srt://${streamHost}:8890?streamid=publish:${f.dbId}?key=${f.ingestKey}` : "";
   const copy = (text) => { try { navigator.clipboard?.writeText(text); toast({ kind: "success", title: "Copied", msg: "Paste into your encoder / ground station." }); } catch { toast({ kind: "info", title: "Copy", msg: text }); } };
-  const authToken = async () => {
-    const { data } = await supabase.auth.getSession();
-    return data?.session?.access_token || "";
-  };
+  // Client-side recording: capture the live WHEP/HLS stream straight from the
+  // <video> element and save the clip to the gallery the moment you press Stop —
+  // no waiting for the mission to end. Survives navigation (stops + uploads on
+  // unmount). Works for any viewer who can see the feed.
   const toggleRecord = async () => {
-    if (!f?.dbId || recordBusy) return;
-    const enable = !recording;
-    setRecordBusy(true);
+    if (!f?.dbId) return;
+    if (mediaRecRef.current) { try { mediaRecRef.current.stop(); } catch {} return; } // stop → onstop uploads
+    const video = videoBoxRef.current?.querySelector("video");
+    const stream = video?.srcObject || (video?.captureStream ? video.captureStream() : null);
+    if (!stream || !video?.videoWidth) { toast({ kind: "warn", title: "No live feed", msg: "Start casting before recording." }); return; }
+    let rec;
     try {
-      const token = await authToken();
-      const r = await fetch(`${gatewayBase}/record`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flightId: f.dbId, token, enable }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (r.ok && j.ok) {
-        setRecording(enable);
-        toast({ kind: "success", title: enable ? "Recording on" : "Recording off",
-          msg: enable ? "This mission is now being recorded." : "Recording stopped for this mission." });
-      } else {
-        toast({ kind: "warn", title: "Couldn't change recording", msg: j.reason || `Error ${r.status}` });
-      }
-    } catch (e) {
-      toast({ kind: "warn", title: "Recorder unreachable", msg: e.message });
-    } finally { setRecordBusy(false); }
+      const mime = ["video/mp4;codecs=h264,aac", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]
+        .find(t => window.MediaRecorder?.isTypeSupported?.(t)) || "";
+      rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    } catch (e) { toast({ kind: "warn", title: "Recording unsupported", msg: e.message }); return; }
+    recChunksRef.current = [];
+    recStartRef.current = Date.now();
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) recChunksRef.current.push(e.data); };
+    rec.onstop = async () => {
+      mediaRecRef.current = null; setRecording(false);
+      const chunks = recChunksRef.current; recChunksRef.current = [];
+      if (!chunks.length) return;
+      const mime = rec.mimeType || "video/webm";
+      const ext = mime.includes("mp4") ? "mp4" : "webm";
+      const blob = new Blob(chunks, { type: mime });
+      const secs = Math.round((Date.now() - recStartRef.current) / 1000);
+      const durStr = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+      const name = `${f.id}-${new Date().toISOString().replace(/[:.]/g, "-")}.${ext}`;
+      const path = `flights/${f.dbId}/recordings/${name}`;
+      const { error: upErr } = await supabase.storage.from("media").upload(path, blob, { contentType: mime, upsert: true });
+      if (upErr) { toast({ kind: "warn", title: "Recording not saved", msg: upErr.message }); return; }
+      await supabase.from("media").insert({ storage_path: path, name, type: "video", flight_id: f.dbId, pilot_id: window.__poUser?.id || null, area: f.area, size: blob.size, duration: durStr });
+      toast({ kind: "success", title: "Recording saved", msg: `${durStr} clip attached to ${f.id} in Media gallery.` });
+    };
+    rec.start(1000);
+    mediaRecRef.current = rec; setRecording(true);
+    toast({ kind: "info", title: "Recording started", msg: "Press Stop to save the clip to the gallery." });
   };
   const toggleFullscreen = () => {
     const el = videoBoxRef.current; if (!el) return;
@@ -109,6 +127,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
       from: m.sender_name || "Crew", role: m.sender_role || "ops", text: m.text,
       time: new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       color: "#2563eb",
+      mine: !!(m.sender_id && window.__poUser?.id && m.sender_id === window.__poUser.id),
     });
     supabase.from("chat_messages").select("*").eq("flight_id", f.dbId).order("created_at")
       .then(({ data }) => setChat((data || []).map(toMsg)));
@@ -121,21 +140,9 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
     return () => { channel && supabase.removeChannel(channel); };
   }, [f?.dbId]);
 
-  // Reflect the current recording state for this mission (set on another device
-  // or earlier this session) so the toggle isn't out of sync after a refresh.
-  lsUseEffect(() => {
-    if (!f?.dbId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const token = await authToken();
-        const r = await fetch(`${gatewayBase}/record?flightId=${encodeURIComponent(f.dbId)}&token=${encodeURIComponent(token)}`);
-        const j = await r.json().catch(() => ({}));
-        if (!cancelled && r.ok && j.ok) setRecording(!!j.recording);
-      } catch { /* gateway may be unreachable; leave toggle as-is */ }
-    })();
-    return () => { cancelled = true; };
-  }, [f?.dbId]);
+  // If the viewer navigates away mid-recording, stop cleanly so the clip is still
+  // saved to the gallery (onstop uploads it).
+  lsUseEffect(() => () => { try { mediaRecRef.current?.stop(); } catch {} }, []);
 
   // Stream the pilot's real device position to the flight row while live.
   lsUseEffect(() => {
@@ -244,13 +251,11 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
             </div>
             {/* Video toolbar */}
             <div style={{ display: "flex", gap: 8, padding: "10px 14px", borderTop: "1px solid var(--border)", alignItems: "center", background: "var(--surface)" }}>
-              <button className={"btn btn-sm " + (recording ? "btn-danger" : "")} onClick={toggleRecord} disabled={recordBusy}
-                      title={recording ? "Stop recording this mission" : "Record this mission to the gallery"}>
-                {recordBusy
-                  ? <>…</>
-                  : recording
-                    ? <><span style={{ width: 8, height: 8, borderRadius: "50%", background: "#fff", animation: "pulse 1.5s infinite" }}/> Recording</>
-                    : <><span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--danger)" }}/> Record</>}
+              <button className={"btn btn-sm " + (recording ? "btn-danger" : "")} onClick={toggleRecord}
+                      title={recording ? "Stop and save this clip to the gallery" : "Record a clip to the gallery"}>
+                {recording
+                  ? <><span style={{ width: 8, height: 8, borderRadius: "50%", background: "#fff", animation: "pulse 1.5s infinite" }}/> Stop</>
+                  : <><span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--danger)" }}/> Record</>}
               </button>
               <button className="btn btn-sm btn-primary" onClick={screenshot}><Icon name="camera" size={13}/> Screenshot</button>
               <button className={"btn btn-sm " + (showAnnotations ? "btn-primary" : "")} onClick={() => setShowAnnotations(s => !s)}><Icon name="sparkle" size={12}/> AI overlay</button>
@@ -311,20 +316,22 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
             </div>
             <div style={{ flex: 1, padding: "8px 14px", overflowY: "auto", maxHeight: 360, display: "flex", flexDirection: "column", gap: 10 }}>
               {chat.map((m, i) => (
-                <div key={i} style={{ display: "flex", gap: 8 }}>
-                  <div style={{ width: 26, height: 26, borderRadius: 6, background: `linear-gradient(135deg, ${m.color}, color-mix(in oklab, ${m.color} 70%, #000))`, color: "white", display: "grid", placeItems: "center", fontSize: 10, fontWeight: 600, flexShrink: 0 }}>
-                    {m.role === "ai" ? <Icon name="sparkle" size={12}/> : m.from.split(" ").map(w => w[0]).slice(0, 2).join("")}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                      <span style={{ fontSize: 12, fontWeight: 600 }}>{m.from}</span>
+                <div key={i} style={{ display: "flex", gap: 8, flexDirection: m.mine ? "row-reverse" : "row" }}>
+                  {!m.mine && (
+                    <div style={{ width: 26, height: 26, borderRadius: 6, background: `linear-gradient(135deg, ${m.color}, color-mix(in oklab, ${m.color} 70%, #000))`, color: "white", display: "grid", placeItems: "center", fontSize: 10, fontWeight: 600, flexShrink: 0 }}>
+                      {m.role === "ai" ? <Icon name="sparkle" size={12}/> : m.from.split(" ").map(w => w[0]).slice(0, 2).join("")}
+                    </div>
+                  )}
+                  <div style={{ maxWidth: "80%", display: "flex", flexDirection: "column", alignItems: m.mine ? "flex-end" : "flex-start" }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexDirection: m.mine ? "row-reverse" : "row" }}>
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>{m.mine ? "You" : m.from}</span>
                       <span className="mono muted" style={{ fontSize: 10 }}>{m.time}</span>
                     </div>
-                    <div style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.45, marginTop: 2,
-                                  background: m.role === "ai" ? "color-mix(in oklab, #7c3aed 8%, var(--surface))" : "transparent",
-                                  border: m.role === "ai" ? "1px solid color-mix(in oklab, #7c3aed 18%, transparent)" : "none",
-                                  padding: m.role === "ai" ? "6px 8px" : 0,
-                                  borderRadius: 6 }}>
+                    <div style={{ fontSize: 12.5, lineHeight: 1.45, marginTop: 3, padding: "7px 10px", wordBreak: "break-word",
+                                  borderRadius: m.mine ? "10px 10px 2px 10px" : "10px 10px 10px 2px",
+                                  background: m.role === "ai" ? "color-mix(in oklab, #7c3aed 10%, var(--surface))" : m.mine ? "var(--accent)" : "var(--bg-muted)",
+                                  color: m.mine ? "#fff" : "var(--text)",
+                                  border: m.role === "ai" ? "1px solid color-mix(in oklab, #7c3aed 18%, transparent)" : "none" }}>
                       {m.text}
                     </div>
                   </div>
@@ -332,8 +339,19 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
               ))}
               <div ref={chatEnd}/>
             </div>
-            <div style={{ borderTop: "1px solid var(--border)", padding: 8, display: "flex", gap: 6, background: "var(--surface-2)" }}>
-              <input className="input" placeholder="Message ops…" value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => e.key === "Enter" && send()} style={{ flex: 1 }}/>
+            <div style={{ position: "relative", borderTop: "1px solid var(--border)", padding: 8, display: "flex", gap: 6, background: "var(--surface-2)", alignItems: "center" }}>
+              {emojiOpen && (
+                <div style={{ position: "absolute", bottom: "calc(100% + 6px)", left: 8, width: 232, padding: 8, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "var(--shadow-md)", display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 2, zIndex: 20 }}>
+                  {CHAT_EMOJIS.map(e => (
+                    <button key={e} onClick={() => { setDraft(d => d + e); setEmojiOpen(false); }}
+                      style={{ border: "none", background: "transparent", fontSize: 20, cursor: "pointer", borderRadius: 6, padding: 4, lineHeight: 1 }}
+                      onMouseEnter={ev => ev.currentTarget.style.background = "var(--bg-muted)"}
+                      onMouseLeave={ev => ev.currentTarget.style.background = "transparent"}>{e}</button>
+                  ))}
+                </div>
+              )}
+              <button className="btn btn-icon btn-ghost" onClick={() => setEmojiOpen(o => !o)} title="Emoji" style={{ fontSize: 16 }}>😊</button>
+              <input className="input" placeholder="Message ops…" value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => e.key === "Enter" && (setEmojiOpen(false), send())} onFocus={() => setEmojiOpen(false)} style={{ flex: 1 }}/>
               <button className="btn btn-primary btn-icon" onClick={send}><Icon name="send" size={14}/></button>
             </div>
           </div>
@@ -386,7 +404,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
         }>
         <div className="muted" style={{ fontSize: 13, marginBottom: 12 }}>This will:</div>
         <ul style={{ paddingLeft: 18, lineHeight: 1.8, fontSize: 13 }}>
-          <li>Stop recording and seal the video to encrypted cloud storage</li>
+          <li>Save any in-progress recording clip to the media gallery</li>
           <li>Auto-generate the post-flight summary using the AI summarizer</li>
           <li>Email the summary + key screenshots to <strong>{STAKEHOLDERS.filter(s => s.notify.includes("summary")).length} stakeholders</strong></li>
           <li>Close the case and archive telemetry</li>
