@@ -18,6 +18,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   const [chat, setChat] = lsUseState([]);
   const [pos, setPos] = lsUseState(null);
   const [online, setOnline] = lsUseState(1);
+  const [viewers, setViewers] = lsUseState(0);
   const [draft, setDraft] = lsUseState("");
   const [emojiOpen, setEmojiOpen] = lsUseState(false);
   const [recording, setRecording] = lsUseState(false); // client-side clip recorder
@@ -144,6 +145,23 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   // saved to the gallery (onstop uploads it).
   lsUseEffect(() => () => { try { mediaRecRef.current?.stop(); } catch {} }, []);
 
+  // Public viewer count — read the same realtime presence rooms the watch page
+  // joins (per-flight + the org's permanent link). We only subscribe to read the
+  // count; we don't track our own presence, so the pilot isn't counted as a viewer.
+  lsUseEffect(() => {
+    if (!f?.dbId) return;
+    const orgKey = window.__poUser?.orgWatchKey;
+    const rooms = [`watch-flight:${f.dbId}`, ...(orgKey ? [`watch-org:${orgKey}`] : [])];
+    const counts = {};
+    const update = () => setViewers(rooms.reduce((s, r) => s + (counts[r] || 0), 0));
+    const channels = rooms.map((r) => {
+      const ch = supabase.channel(r, { config: { presence: { key: "obs" } } });
+      ch.on("presence", { event: "sync" }, () => { counts[r] = Object.keys(ch.presenceState()).length; update(); }).subscribe();
+      return ch;
+    });
+    return () => { channels.forEach((ch) => { try { supabase.removeChannel(ch); } catch {} }); setViewers(0); };
+  }, [f?.dbId]);
+
   // Stream the pilot's real device position to the flight row while live.
   lsUseEffect(() => {
     if (!f?.dbId) return;
@@ -227,6 +245,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
           <h1 className="page-title" style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 10 }}>
             {f.area}
             <span className="badge badge-live"><span className="dot"/>LIVE</span>
+            <span className="badge" title="People watching the public share link now" style={{ fontWeight: 600 }}>👁 {viewers} watching</span>
           </h1>
           <div className="page-sub">
             Pilot {f.pilot?.name || "—"} · UAV {f.uav?.id || "—"} · Station {f.station?.name || "—"}
