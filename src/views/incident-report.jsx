@@ -12,7 +12,9 @@ function IncidentReportView({ basemap, setBasemap }) {
   const incidentTypes = (SECTORS.generic?.incidentTypes || []);
   const [form, setForm] = irUseState({
     type: incidentTypes[0] || "Anomaly", severity: "medium", title: "", desc: "",
-    location: "", flight: "", lat: null, lng: null,
+    // Default to the live mission so an incident logged during a flight links to
+    // it (and shows in that flight's post-flight summary). Editable below.
+    location: "", flight: (typeof ACTIVE_FLIGHTS !== "undefined" && ACTIVE_FLIGHTS[0]?.id) || "", lat: null, lng: null,
   });
   const [busy, setBusy] = irUseState(false);
   const [incidentId, setIncidentId] = irUseState(() => "INC-" + Date.now().toString().slice(-6));

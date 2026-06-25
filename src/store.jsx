@@ -68,7 +68,7 @@ function mapFlight(f, liveSet) {
   return {
     id: f.code || f.id, dbId: f.id, pilot, uav, station,
     area: f.area, coverageKm: Number(f.coverage_km || 0),
-    duration: started ? fmtClock(Date.now() - new Date(started).getTime()) : "00:00:00",
+    duration: started ? fmtClock((f.ended_at ? new Date(f.ended_at).getTime() : Date.now()) - new Date(started).getTime()) : "00:00:00",
     started: hhmm(started), status: f.status, altitude: f.altitude || 0,
     speed: 0, signal: 90, lat: f.cur_lat ?? f.launch_lat, lng: f.cur_lng ?? f.launch_lng,
     emergency: f.emergency, emergencyType: f.emergency_type, justification: f.justification,
@@ -127,14 +127,22 @@ export async function bootstrap() {
       const h = start.getHours();
       return { date: f.ended_at, minutes: Math.max(0, (end - start) / 60000), night: (h < 6 || h >= 18), pilotId: f.pilot_id };
     });
+  // Incident count per flight (real), so completed flights carry their true tally.
+  const incidentCountByFlight = {};
+  incidentsRaw.forEach((i) => { if (i.flight_id) incidentCountByFlight[i.flight_id] = (incidentCountByFlight[i.flight_id] || 0) + 1; });
+
+  // Completed flights carry the FULL mapped shape (coverageKm, uav, station,
+  // altitude, started, duration…) so the post-flight summary has everything it
+  // needs. pilot stays a string here for the command palette / reports archive.
   const recentFlights = flightsRaw
     .filter((f) => f.status === "completed" || f.status === "flagged")
     .slice(0, 12)
     .map((f) => ({
-      id: f.code || f.id, dbId: f.id, pilot: f.pilot?.full_name || "—",
+      ...mapFlight(f, liveSet),
+      pilot: f.pilot?.full_name || "—",
       date: dateLabel(f.ended_at || f.created_at),
-      duration: f.started_at && f.ended_at ? fmtClock(new Date(f.ended_at) - new Date(f.started_at)) : "—",
-      area: f.area, incidents: 0, status: f.status,
+      incidents: incidentCountByFlight[f.id] || 0,
+      status: f.status,
     }));
 
   const incidents = incidentsRaw.map((i) => ({
