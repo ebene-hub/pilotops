@@ -15,11 +15,18 @@ const TYPE_META = {
 };
 
 function formatBytes(b) {
-  if (b > 1e9) return (b / 1e9).toFixed(2) + " GB";
-  if (b > 1e6) return (b / 1e6).toFixed(1) + " MB";
-  if (b > 1e3) return (b / 1e3).toFixed(0) + " KB";
+  b = Number(b) || 0;
+  if (b >= 1e9) return (b / 1e9).toFixed(2) + " GB";
+  if (b >= 1e6) return (b / 1e6).toFixed(1) + " MB";
+  if (b >= 1e3) return (b / 1e3).toFixed(0) + " KB";
   return b + " B";
 }
+
+// Storage capacity — set VITE_STORAGE_QUOTA_GB to your Supabase plan's storage
+// limit (Free = 1 GB, Pro = 100 GB, …) so the "% used / almost full" indicator is
+// accurate. Defaults to 1 GB (free tier) until configured.
+const STORAGE_QUOTA_GB = Number(import.meta.env.VITE_STORAGE_QUOTA_GB) || 1;
+const STORAGE_QUOTA_BYTES = STORAGE_QUOTA_GB * 1e9;
 
 // Real media preview from the private bucket via a signed URL (videos play,
 // photos render). Falls back to the styled thumbnail if there's no file.
@@ -231,6 +238,8 @@ function MediaGalleryView({ accent }) {
 
   const totalBytes = mgUseMemo(() => media.reduce((s, m) => s + (m.size || 0), 0), [media]);
   const [storageNum, storageUnit] = formatBytes(totalBytes).split(" ");
+  const usedPct = STORAGE_QUOTA_BYTES > 0 ? (totalBytes / STORAGE_QUOTA_BYTES) * 100 : 0;
+  const nearFull = usedPct >= 80;
   const videoBytes = mgUseMemo(() => media.filter(m => m.type === "video").reduce((s, m) => s + (m.size || 0), 0), [media]);
   const uploadedToday = mgUseMemo(() => {
     const t = new Date(); t.setHours(0, 0, 0, 0);
@@ -337,7 +346,7 @@ function MediaGalleryView({ accent }) {
       <div className="page-head">
         <div>
           <h1 className="page-title">Media gallery</h1>
-          <div className="page-sub">{media.length.toLocaleString()} files · {formatBytes(totalBytes)} stored</div>
+          <div className="page-sub">{media.length.toLocaleString()} files · {formatBytes(totalBytes)} of {STORAGE_QUOTA_GB} GB used</div>
         </div>
         <div className="page-actions">
           {showPilotFilter && (
@@ -358,10 +367,13 @@ function MediaGalleryView({ accent }) {
           <div className="kpi-label"><span>Storage used</span></div>
           <div className="kpi-value">
             <span style={{ fontVariantNumeric: "tabular-nums" }}>{storageNum}</span>
-            <span className="unit">{storageUnit}</span>
+            <span className="unit">{storageUnit} / {STORAGE_QUOTA_GB} GB</span>
           </div>
-          <div className="kpi-delta" style={{ color: "var(--text-3)", marginTop: 6 }}>
-            {formatBytes(videoBytes)} video · across {media.length.toLocaleString()} file{media.length === 1 ? "" : "s"}
+          <div style={{ marginTop: 12, height: 6, borderRadius: 3, background: "var(--bg-muted)", overflow: "hidden" }}>
+            <div style={{ width: `${Math.min(100, usedPct)}%`, height: "100%", borderRadius: 3, background: nearFull ? "var(--warning)" : "var(--accent)" }}/>
+          </div>
+          <div className="kpi-delta" style={{ color: nearFull ? "var(--warning)" : "var(--text-3)", marginTop: 6 }}>
+            {usedPct < 0.1 ? "<0.1" : usedPct.toFixed(1)}% used{nearFull ? " · almost full" : ` · ${formatBytes(STORAGE_QUOTA_BYTES - totalBytes)} free`}
           </div>
         </div>
         <KpiTile label="Total media" value={media.length.toLocaleString()} unit="files" delta={`${uploadedToday} today`} trend="up" spark={Array(7).fill(media.length)}/>

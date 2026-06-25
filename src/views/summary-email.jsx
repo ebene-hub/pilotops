@@ -235,6 +235,7 @@ function MediaPicker({ open, onClose, onConfirm, alreadySelected = [] }) {
   const library = window.MEDIA_LIBRARY || [];
   const TYPE_META = window.TYPE_META || {};
   const MediaThumb = window.MediaThumb;
+  const formatBytes = window.formatBytes || (b => `${b || 0} B`);
 
   const [picked, setPicked] = seUseState(new Set(alreadySelected));
   const [typeFilter, setTypeFilter] = seUseState("all");
@@ -275,12 +276,9 @@ function MediaPicker({ open, onClose, onConfirm, alreadySelected = [] }) {
       <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ display: "flex", gap: 4 }}>
           {[
-            { k: "all",     l: "All",     ic: "folder" },
-            { k: "photo",   l: "Photos",  ic: "image" },
-            { k: "video",   l: "Video",   ic: "video" },
-            { k: "thermal", l: "Thermal", ic: "fire" },
-            { k: "lidar",   l: "LiDAR",   ic: "layers" },
-            { k: "map",     l: "Maps",    ic: "pin" },
+            { k: "all",   l: "All",    ic: "folder" },
+            { k: "photo", l: "Photos", ic: "image" },
+            { k: "video", l: "Video",  ic: "video" },
           ].map(o => (
             <button key={o.k}
               onClick={() => setTypeFilter(o.k)}
@@ -332,7 +330,7 @@ function MediaPicker({ open, onClose, onConfirm, alreadySelected = [] }) {
               </div>
               <div style={{ padding: "7px 9px" }}>
                 <div className="mono" style={{ fontSize: 11.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</div>
-                <div style={{ fontSize: 10.5, color: "var(--text-3)", marginTop: 1 }}>{m.flight} · {m.area}</div>
+                <div style={{ fontSize: 10.5, color: "var(--text-3)", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.flight} · {formatBytes(m.size)}</div>
               </div>
             </div>
           );
@@ -440,6 +438,25 @@ function SummaryEmailView({ flight }) {
     const { data, error } = await sb.storage.from("media").createSignedUrl(m.path, 3600, { download: m.name });
     if (error || !data?.signedUrl) { toast({ kind: "warn", title: "Download failed", msg: error?.message || "Could not get a link." }); return; }
     window.open(data.signedUrl, "_blank");
+  }
+
+  // Open this flight's recording — the latest video saved against it (a recorded
+  // clip or screen cast). Queries the DB live so a just-saved clip is found even
+  // if the gallery snapshot is stale.
+  async function viewRecording() {
+    const sb = window.__supabase;
+    if (!f?.dbId || !sb) { toast({ kind: "warn", title: "No recording", msg: "No flight selected." }); return; }
+    toast({ kind: "info", title: "Finding recording", msg: "Locating this flight's video…" });
+    const { data, error } = await sb.from("media")
+      .select("storage_path, name").eq("flight_id", f.dbId).eq("type", "video")
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (error || !data?.storage_path) {
+      toast({ kind: "warn", title: "No recording", msg: "No video was recorded for this flight. Use Record on the live feed to capture one." });
+      return;
+    }
+    const { data: signed, error: sErr } = await sb.storage.from("media").createSignedUrl(data.storage_path, 3600);
+    if (sErr || !signed?.signedUrl) { toast({ kind: "warn", title: "Couldn't open recording", msg: sErr?.message || "No link." }); return; }
+    window.open(signed.signedUrl, "_blank");
   }
 
   function setField(k, v) {
@@ -680,8 +697,8 @@ function SummaryEmailView({ flight }) {
 
                   {/* Buttons */}
                   <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
-                    <a href="#" onClick={e => e.preventDefault()} style={{ background: "#2563eb", color: "white", padding: "10px 18px", borderRadius: 8, textDecoration: "none", fontWeight: 500, fontSize: 13, display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="video" size={13}/> View recording</a>
-                    <a href="#" onClick={e => e.preventDefault()} style={{ background: "white", color: "#2563eb", padding: "10px 18px", borderRadius: 8, textDecoration: "none", fontWeight: 500, fontSize: 13, display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #2563eb" }}><Icon name="reports" size={13}/> Full report (PDF)</a>
+                    <button onClick={viewRecording} style={{ background: "#2563eb", color: "white", padding: "10px 18px", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 500, fontSize: 13, display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="video" size={13}/> View recording</button>
+                    <button onClick={downloadPdf} style={{ background: "white", color: "#2563eb", padding: "10px 18px", borderRadius: 8, cursor: "pointer", fontWeight: 500, fontSize: 13, display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #2563eb" }}><Icon name="reports" size={13}/> Full report (PDF)</button>
                   </div>
                 </div>
 
