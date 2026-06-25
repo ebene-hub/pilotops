@@ -103,6 +103,9 @@ export async function bootstrap() {
     safe(supabase.from("roles").select("*").order("name"), []),
   ]);
 
+  // Crew rosters for currently-live flights (to prevent double-booking crew).
+  const crewRaw = await safe(supabase.from("flight_crew").select("flight_id, profile_id, role"), []);
+
   // Members & invites (invites are admin-RLS — pilots just get []).
   const invitesRaw = await safe(supabase.from("invites").select("*").order("created_at", { ascending: false }), []);
 
@@ -164,6 +167,29 @@ export async function bootstrap() {
   const pilotNameById = {};
   profilesRaw.forEach((p) => { pilotNameById[p.id] = p.full_name; });
 
+  // Crew commitments on LIVE flights → used to (a) stop two pilots booking the
+  // same crew member and (b) show a co-pilot/crew member they're already on a
+  // mission (and block them from starting another).
+  const liveFlightsRaw = flightsRaw.filter((f) => f.status === "live");
+  const liveFlightById = {};
+  liveFlightsRaw.forEach((f) => { liveFlightById[f.id] = f; });
+  const crewAssignments = {};   // profileId -> { flightId, code, area, role, picId, picName }
+  const liveCrewByFlight = {};  // flightId -> [{ id, role, name }]
+  liveFlightsRaw.forEach((f) => {
+    const picName = f.pilot?.full_name || pilotNameById[f.pilot_id] || "—";
+    liveCrewByFlight[f.id] = [{ id: f.pilot_id, role: "Pilot", name: picName }];
+    if (f.pilot_id) crewAssignments[f.pilot_id] = { flightId: f.id, code: f.code || f.id, area: f.area, role: "Pilot", picId: f.pilot_id, picName };
+  });
+  crewRaw.forEach((c) => {
+    const f = liveFlightById[c.flight_id];
+    if (!f) return;                                  // crew row for a non-live flight
+    const name = pilotNameById[c.profile_id] || "—";
+    if (c.role !== "Pilot") (liveCrewByFlight[f.id] = liveCrewByFlight[f.id] || []).push({ id: c.profile_id, role: c.role, name });
+    if (!crewAssignments[c.profile_id]) {
+      crewAssignments[c.profile_id] = { flightId: f.id, code: f.code || f.id, area: f.area, role: c.role, picId: f.pilot_id, picName: pilotNameById[f.pilot_id] || "—" };
+    }
+  });
+
   const media = mediaRaw.map((m) => ({
     id: m.id, shortId: m.id ? m.id.slice(0, 8).toUpperCase() : "", name: m.name, type: m.type, size: m.size, dur: m.duration,
     pilot: pilotNameById[m.pilot_id] || flightPilotById[m.flight_id] || "—",
@@ -199,6 +225,8 @@ export async function bootstrap() {
     STAKEHOLDERS: stakeholdersRaw.map((s) => ({ id: s.id, name: s.name, email: s.email, role: s.role, notify: s.notify || [], avatar: s.avatar || colorFor(s.id) })),
     ACTIVE_FLIGHTS: activeFlights,
     RECENT_FLIGHTS: recentFlights,
+    CREW_ASSIGNMENTS: crewAssignments,
+    LIVE_CREW_BY_FLIGHT: liveCrewByFlight,
     INCIDENTS: incidents,
     REPORTS_ARCHIVE: reports,
     MEDIA_LIBRARY: media,
