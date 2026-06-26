@@ -45,6 +45,9 @@ ssh -i your-key.pem ubuntu@YOUR_ELASTIC_IP
 
 ## 4. Install Docker + a little swap (1 GB RAM is tight)
 
+> **Fast path:** `setup.sh` (used in step 6) installs Docker **and** the swap file
+> for you, so you can skip this step and go straight to cloning in step 6.
+
 ```bash
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker ubuntu
@@ -80,9 +83,11 @@ STREAM_DOMAIN=YOUR_HOSTNAME              # from step 5
 SUPABASE_URL=https://zfpuulhgcubndcywfjxy.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=...            # Supabase → Settings → API → service_role
 ```
-Then:
+Then run the bootstrap (installs Docker + swap if missing, builds, and starts
+everything — also the way to redeploy later after a `git pull`):
 ```bash
-docker compose up -d --build
+chmod +x setup.sh
+./setup.sh
 docker compose logs -f caddy            # watch it obtain the TLS cert
 ```
 Check it's serving (after the cert is issued):
