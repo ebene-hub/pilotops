@@ -7,6 +7,9 @@ const { useState: lvUseState, useEffect: lvUseEffect, useRef: lvUseRef } = React
 
 const STREAM_BASE = (import.meta.env.VITE_STREAM_URL || "/stream").replace(/\/$/, "");
 const HLS_BASE = (import.meta.env.VITE_STREAM_HLS_URL || "/hls").replace(/\/$/, "");
+// Target receiver buffer (ms). A small buffer (not zero) absorbs jitter/packet
+// loss so poor connections stop freezing, while staying well under a second.
+const JITTER_MS = Number(import.meta.env.VITE_STREAM_JITTER_MS) || 500;
 
 async function accessToken() {
   try { const { data } = await supabase.auth.getSession(); return data?.session?.access_token || ""; }
@@ -28,9 +31,9 @@ async function whepPlay(url, videoEl, token) {
   if (!res.ok) { pc.close(); throw new Error("WHEP " + res.status); }
   const answer = await res.text();
   await pc.setRemoteDescription({ type: "answer", sdp: answer });
-  // Minimise the receiver playout/jitter buffer for live ops — trade a little
-  // smoothing for ~hundreds of ms lower glass-to-glass latency.
-  pc.getReceivers().forEach((r) => { try { r.playoutDelayHint = 0; r.jitterBufferTarget = 0; } catch {} });
+  // Small jitter buffer (not zero): smooths lossy/poor connections so the feed
+  // stops freezing, while keeping glass-to-glass latency sub-second.
+  pc.getReceivers().forEach((r) => { try { r.jitterBufferTarget = JITTER_MS; r.playoutDelayHint = JITTER_MS / 1000; } catch {} });
   return pc;
 }
 
@@ -49,12 +52,15 @@ function LiveVideoFeed({ showAnnotations, flash, duration, flight, recording, pl
   const [state, setState] = lvUseState("connecting"); // connecting | live | waiting
 
   lvUseEffect(() => {
-    let pc, hls, cancelled = false, retry, watchdog, stallTimer;
+    let pc, hls, cancelled = false, retry, watchdog, stallTimer, whepFails = 0, preferHls = false;
     const video = videoRef.current;
     const id = flight?.dbId || flight?.id;
     if (!id || !video) return;
 
-    function markLive() { if (cancelled) return; clearTimeout(watchdog); setState("live"); watchFrames(); }
+    function markLive() { if (cancelled) return; clearTimeout(watchdog); whepFails = 0; setState("live"); watchFrames(); }
+    // After WebRTC fails repeatedly (UDP blocked / too lossy), prefer HLS, which
+    // rides TCP/HTTPS and survives poor or restrictive networks.
+    function failWhep() { if (++whepFails >= 2) preferHls = true; teardown(); schedule(); }
     // Silent-freeze watchdog. A WHEP session can stay "connected" yet stop
     // rendering new frames (packet loss leaves the decoder waiting for a keyframe),
     // so the picture freezes while connectionState never reports a problem. Watch
@@ -77,24 +83,29 @@ function LiveVideoFeed({ showAnnotations, flash, duration, flight, recording, pl
       pc = hls = null;
       if (video) { video.onplaying = null; video.srcObject = null; }
     }
+    async function playHls(token) {
+      try { hls = await hlsPlay(`${HLS_BASE}/${id}/index.m3u8`, video, token); video.onplaying = markLive; }
+      catch { schedule(); }
+    }
     async function attempt() {
       if (cancelled) return;
       const token = await accessToken();
+      if (preferHls) return playHls(token);                // stay on the resilient path
       try {
         pc = await whepPlay(`${STREAM_BASE}/${id}/whep`, video, token);
         video.onplaying = markLive;                       // frames actually arrived
         pc.onconnectionstatechange = () => {
           if (cancelled) return;
           if (pc.connectionState === "connected") markLive();
-          else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) { teardown(); schedule(); }
+          else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) failWhep();
         };
         pc.oniceconnectionstatechange = () => { if (!cancelled && ["connected", "completed"].includes(pc.iceConnectionState)) markLive(); };
         // If a "successful" offer never actually plays within 7s, retry cleanly
-        // (avoids getting stuck waiting — no manual refresh needed).
-        watchdog = setTimeout(() => { if (!cancelled) { teardown(); schedule(); } }, 7000);
+        // (and count it toward escalating to HLS).
+        watchdog = setTimeout(() => { if (!cancelled) failWhep(); }, 7000);
       } catch {
-        try { hls = await hlsPlay(`${HLS_BASE}/${id}/index.m3u8`, video, token); video.onplaying = markLive; }
-        catch { schedule(); }
+        if (++whepFails >= 2) preferHls = true;
+        await playHls(token);
       }
     }
 

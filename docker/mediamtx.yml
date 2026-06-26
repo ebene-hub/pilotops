@@ -41,8 +41,14 @@ webrtcAdditionalHosts: []
 
 hls: yes
 hlsAddress: :8888
+# Low-Latency HLS is the resilient fallback for viewers whose network blocks UDP
+# /WebRTC or is too lossy for it (it rides TCP/HTTPS through Caddy). Tuned for a
+# small delay while keeping ~7 short segments of headroom to ride out hiccups.
 hlsVariant: lowLatency
 hlsAlwaysRemux: yes
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
 
 ###############################################
 # Defaults applied to every path (= every flight)

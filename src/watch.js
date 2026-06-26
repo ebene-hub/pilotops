@@ -11,6 +11,10 @@ const sb = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_
 });
 
 const STREAM_BASE = (import.meta.env.VITE_STREAM_URL || "/stream").replace(/\/$/, "");
+const HLS_BASE = (import.meta.env.VITE_STREAM_HLS_URL || "/hls").replace(/\/$/, "");
+// Target receiver buffer (ms). A small buffer absorbs jitter/packet loss so poor
+// connections don't freeze constantly; still well under a second of latency.
+const JITTER_MS = Number(import.meta.env.VITE_STREAM_JITTER_MS) || 500;
 
 const params = new URLSearchParams(location.search);
 const singleFlight = params.get("f") || "";
@@ -40,9 +44,22 @@ async function whepPlay(url, el) {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/sdp" }, body: offer.sdp });
   if (!res.ok) { pc.close(); throw new Error("WHEP " + res.status); }
   await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
-  // Minimise the playout/jitter buffer for lower live latency.
-  pc.getReceivers().forEach((r) => { try { r.playoutDelayHint = 0; r.jitterBufferTarget = 0; } catch {} });
+  // A small jitter buffer (not zero) smooths lossy/poor connections without
+  // adding meaningful latency — far fewer freezes than a hard 0.
+  pc.getReceivers().forEach((r) => { try { r.jitterBufferTarget = JITTER_MS; r.playoutDelayHint = JITTER_MS / 1000; } catch {} });
   return pc;
+}
+
+// HLS fallback — rides TCP/HTTPS (through Caddy), so it works on networks that
+// block UDP/WebRTC or are too lossy for it. Low-latency HLS keeps the delay small.
+async function hlsPlay(url, el, onFatal) {
+  if (el.canPlayType("application/vnd.apple.mpegurl")) { el.src = url; el.play?.().catch(() => {}); return { destroy() { el.src = ""; } }; }
+  const Hls = (await import("hls.js")).default;
+  if (!Hls.isSupported()) throw new Error("HLS unsupported");
+  const hls = new Hls({ lowLatencyMode: true, backBufferLength: 10, liveSyncDurationCount: 3 });
+  hls.on(Hls.Events.ERROR, (_e, data) => { if (data?.fatal) onFatal?.(); });
+  hls.loadSource(url); hls.attachMedia(el);
+  return hls;
 }
 
 // ---- Tiles (one per live mission) ------------------------------------------
@@ -65,9 +82,17 @@ function watchTile(t, myGen) {
   }, 1000);
 }
 
+// After WebRTC fails twice (UDP blocked / too lossy), drop this tile to HLS so a
+// poor-network viewer still gets the feed.
+function escalate(t) { t.whepFails = (t.whepFails || 0) + 1; if (t.whepFails >= 2) t.useHls = true; }
+
 function connectTile(t) {
   const myGen = ++t.gen;
   clearInterval(t.stall);
+  try { t.pc?.close(); } catch {} t.pc = null;
+  try { t.hls?.destroy(); } catch {} t.hls = null;
+  if (t.useHls) return connectTileHls(t, myGen);
+
   whepPlay(`${STREAM_BASE}/${t.flightId}/whep?key=${encodeURIComponent(t.key)}`, t.video)
     .then((p) => {
       if (myGen !== t.gen) { try { p.close(); } catch {} return; }
@@ -75,18 +100,32 @@ function connectTile(t) {
       watchTile(t, myGen);
       p.onconnectionstatechange = () => {
         if (myGen !== t.gen) return;
-        if (p.connectionState === "connected") t.el.classList.add("live");
+        if (p.connectionState === "connected") { t.el.classList.add("live"); t.whepFails = 0; }
         else if (["failed", "disconnected", "closed"].includes(p.connectionState)) {
           t.el.classList.remove("live"); try { p.close(); } catch {}
-          setTimeout(() => { if (myGen === t.gen) connectTile(t); }, 4000);
+          escalate(t);
+          setTimeout(() => { if (myGen === t.gen) connectTile(t); }, 3000);
         }
       };
     })
     .catch(() => {
       if (myGen !== t.gen) return;
       t.el.classList.remove("live");
-      setTimeout(() => { if (myGen === t.gen) connectTile(t); }, 4000);
+      escalate(t);
+      setTimeout(() => { if (myGen === t.gen) connectTile(t); }, 3000);
     });
+}
+
+function connectTileHls(t, myGen) {
+  hlsPlay(`${HLS_BASE}/${t.flightId}/index.m3u8?key=${encodeURIComponent(t.key)}`, t.video,
+    () => { if (myGen === t.gen) { t.el.classList.remove("live"); setTimeout(() => { if (myGen === t.gen) connectTileHls(t, ++t.gen); }, 3000); } })
+    .then((h) => {
+      if (myGen !== t.gen) { try { h.destroy?.(); } catch {} return; }
+      t.hls = h;
+      t.el.classList.add("live");
+      watchTile(t, myGen);
+    })
+    .catch(() => { if (myGen === t.gen) setTimeout(() => { if (myGen === t.gen) connectTileHls(t, ++t.gen); }, 4000); });
 }
 
 const MAX_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/></svg>`;
@@ -146,7 +185,7 @@ function restoreTile(t) {
 function removeTile(id) {
   const t = tiles.get(id);
   if (!t) return;
-  t.gen++; clearInterval(t.stall); try { t.pc?.close(); } catch {}
+  t.gen++; clearInterval(t.stall); try { t.pc?.close(); } catch {} try { t.hls?.destroy(); } catch {}
   t.el.remove();
   tiles.delete(id);
 }
