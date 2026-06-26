@@ -23,6 +23,7 @@ import com.pedro.encoder.input.sources.audio.NoAudioSource
 import com.pedro.encoder.input.sources.video.NoVideoSource
 import com.pedro.encoder.input.sources.video.ScreenSource
 import com.pedro.library.generic.GenericStream
+import com.pedro.library.util.BitrateAdapter
 import kotlin.concurrent.thread
 import kotlin.math.max
 import kotlin.math.min
@@ -45,6 +46,9 @@ class ScreenCastService : Service(), ConnectChecker {
     // only field signal is a bitrate that collapses to the static floor.
     @Volatile private var lastMotionMs = 0L
     @Volatile private var healsSinceMotion = 0
+    // Adapts the encoder bitrate to the real uplink (poor field internet) so the
+    // cast backs off and recovers instead of saturating and freezing for viewers.
+    private var bitrateAdapter: BitrateAdapter? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -89,6 +93,11 @@ class ScreenCastService : Service(), ConnectChecker {
             s.prepareVideo(w, h, BITRATE, FPS, iFrameInterval = 1, rotation = rotation) && s.prepareAudio(32000, true, 128 * 1000)
         } catch (_: Exception) { false }
         if (!prepared) { CastBus.emit(CastStatus.Failed("Encoder init failed")); stopCast(); return }
+
+        // Cap adaptation at the configured bitrate; it scales down under uplink
+        // congestion and climbs back up as the connection recovers.
+        bitrateAdapter = BitrateAdapter { br -> try { stream?.setVideoBitrateOnFly(br) } catch (_: Exception) {} }
+            .apply { setMaxBitrate(BITRATE) }
 
         val mp = mpm.getMediaProjection(resultCode, data)
         if (mp == null) { CastBus.emit(CastStatus.Failed("Screen capture unavailable")); stopCast(); return }
@@ -165,6 +174,7 @@ class ScreenCastService : Service(), ConnectChecker {
 
     private fun stopCast() {
         polling = false
+        bitrateAdapter = null
         try { stream?.let { if (it.isStreaming) it.stopStream() } } catch (_: Exception) {}
         try { stream?.release() } catch (_: Exception) {}
         stream = null
@@ -179,6 +189,9 @@ class ScreenCastService : Service(), ConnectChecker {
     override fun onConnectionStarted(url: String) { CastBus.emit(CastStatus.Connecting) }
     override fun onConnectionSuccess() { lastMotionMs = System.currentTimeMillis(); healsSinceMotion = 0; CastBus.emit(CastStatus.Live(0)) }
     override fun onNewBitrate(bitrate: Long) {
+        // Feed the real sent bitrate (and uplink congestion) to the adapter so it
+        // can dial the encoder up/down to match the field connection.
+        try { bitrateAdapter?.adaptBitrate(bitrate, stream?.getStreamClient()?.hasCongestion() ?: false) } catch (_: Exception) {}
         // Bitrate above the static floor = the capture is delivering fresh frames →
         // mark motion and re-arm the stall watchdog.
         if (bitrate > MOTION_FLOOR_BPS) { lastMotionMs = System.currentTimeMillis(); healsSinceMotion = 0 }
@@ -241,7 +254,9 @@ class ScreenCastService : Service(), ConnectChecker {
         private const val CHANNEL = "cast"
         private const val NOTIF_ID = 42
         private const val FPS = 30
-        private const val BITRATE = 2_500_000
+        // Ceiling for the adaptive encoder. 2 Mbps @ 720p30 is sustainable for most
+        // viewers' downlinks; the adapter scales below this when the uplink is poor.
+        private const val BITRATE = 2_000_000
         // Below this the encoder is almost certainly re-sending a static/frozen
         // frame; sustained for STALL_MS we rebuild the capture surface.
         private const val MOTION_FLOOR_BPS = 350_000L
