@@ -332,21 +332,31 @@ function wireUi() {
 }
 
 // ---- Org (permanent) mode: follow all live missions -------------------------
+// Poll every few seconds and reconcile the visible tiles. CRITICAL: the loop must
+// keep going even if one tick throws (a transient network blip, a render error) —
+// otherwise the page would silently stop updating and need a manual refresh. So
+// the reschedule lives in `finally`, and only a genuinely invalid key stops it.
+let stopPolling = false;
 async function orgTick() {
-  let streams;
-  let { data, error } = await sb.rpc("get_active_public_streams", { p_watch_key: watchKey });
-  if (error) {
-    // Migration 0017 not applied yet — fall back to the single-stream resolver.
-    const r = await sb.rpc("get_active_public_stream", { p_watch_key: watchKey });
-    if (r.data?.reason === "invalid") return fail("This watch link is invalid.");
-    streams = r.data?.ok ? [r.data] : [];
-  } else {
-    if (data?.reason === "invalid") return fail("This watch link is invalid.");
-    streams = data?.streams || [];
+  try {
+    let streams;
+    const { data, error } = await sb.rpc("get_active_public_streams", { p_watch_key: watchKey });
+    if (error) {
+      // Migration 0017 not applied yet — fall back to the single-stream resolver.
+      const r = await sb.rpc("get_active_public_stream", { p_watch_key: watchKey });
+      if (r.data?.reason === "invalid") { stopPolling = true; return fail("This watch link is invalid."); }
+      streams = r.data?.ok ? [r.data] : [];
+    } else {
+      if (data?.reason === "invalid") { stopPolling = true; return fail("This watch link is invalid."); }
+      streams = data?.streams || [];
+    }
+    if (!streams.length) setWaiting("No active mission right now — this page goes live automatically when a mission starts.");
+    syncTiles(streams);
+  } catch (_e) {
+    // transient — keep polling, the next tick recovers
+  } finally {
+    if (!stopPolling) setTimeout(orgTick, 5000);
   }
-  if (!streams.length) setWaiting("No active mission right now — this page goes live automatically when a mission starts.");
-  syncTiles(streams);
-  setTimeout(orgTick, 6000);
 }
 
 // ---- init -------------------------------------------------------------------
@@ -356,11 +366,20 @@ wireEmoji();
 joinPresence();
 chatLoop();
 
-(async () => {
-  if (watchKey) return orgTick();
-  if (!singleFlight || !singleKey) return fail("Invalid link.");
-  const { data, error } = await sb.rpc("get_public_stream", { p_flight: singleFlight, p_key: singleKey });
-  if (error || !data?.ok) return fail("This live link is invalid or has expired.");
-  syncTiles([{ flight: singleFlight, key: singleKey, code: data.code, area: data.area, pilot: data.pilot }]);
-  if (data.status !== "live") setWaiting("Mission not currently live");
-})();
+// ---- Single-flight mode: poll so the feed appears when casting starts --------
+async function singleTick() {
+  try {
+    const { data, error } = await sb.rpc("get_public_stream", { p_flight: singleFlight, p_key: singleKey });
+    if (error || !data?.ok) { stopPolling = true; return fail("This live link is invalid or has expired."); }
+    syncTiles([{ flight: singleFlight, key: singleKey, code: data.code, area: data.area, pilot: data.pilot }]);
+    if (data.status !== "live") setWaiting("Mission not currently live — this page goes live automatically when casting starts.");
+  } catch (_e) {
+    // transient — keep polling
+  } finally {
+    if (!stopPolling) setTimeout(singleTick, 5000);
+  }
+}
+
+if (watchKey) orgTick();
+else if (!singleFlight || !singleKey) fail("Invalid link.");
+else singleTick();

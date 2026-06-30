@@ -1571,6 +1571,20 @@ end; $$;
 grant execute on function admin_clear_pilot_lockout(uuid) to authenticated;
 
 -- ============================================================
+-- 0025_notifications_realtime.sql
+-- ============================================================
+-- Real-time in-app notification delivery (bell updates live, RLS org-scoped).
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+     where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'notifications'
+  ) then
+    alter publication supabase_realtime add table notifications;
+  end if;
+end $$;
+
+-- ============================================================
 -- seed.sql
 -- ============================================================
 -- Pilot Ops — seed CONFIG defaults only (no dummy people, flights, or fleet).

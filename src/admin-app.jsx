@@ -207,7 +207,17 @@ function AdminNotificationsBell() {
     const { data } = await window.__supabase.from("notifications").select("type,payload,created_at").order("created_at", { ascending: false }).limit(30);
     setItems(data || []);
   }
-  aaAppUseEffect(() => { load(); }, []);
+  // Live delivery: new notifications (lockouts, mission start/end, incidents…)
+  // appear in the bell instantly, org-scoped by RLS.
+  aaAppUseEffect(() => {
+    load();
+    const sb = window.__supabase; if (!sb) return;
+    const ch = sb.channel("notif-bell-admin")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications" },
+        (p) => setItems(prev => [p.new, ...prev].slice(0, 30)))
+      .subscribe();
+    return () => { try { sb.removeChannel(ch); } catch {} };
+  }, []);
   const visible = visibleNotifs(items);
   const unread = unreadCount(items);
   return (

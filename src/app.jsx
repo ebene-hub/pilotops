@@ -322,7 +322,16 @@ function NotificationsBell() {
     const { data } = await supabase.from("notifications").select("type,payload,created_at").order("created_at", { ascending: false }).limit(30);
     setItems(data || []);
   }
-  appUseEffect(() => { load(); }, []);
+  // Live delivery: prepend new notifications as they arrive (RLS scopes them to
+  // this user's org), so the bell updates without reopening or refreshing.
+  appUseEffect(() => {
+    load();
+    const ch = supabase.channel("notif-bell-pilot")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications" },
+        (p) => setItems(prev => [p.new, ...prev].slice(0, 30)))
+      .subscribe();
+    return () => { try { supabase.removeChannel(ch); } catch {} };
+  }, []);
   const unread = unreadCount(items);
   return (
     <div ref={ref} style={{ position: "relative" }}>
