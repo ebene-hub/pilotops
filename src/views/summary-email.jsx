@@ -11,6 +11,37 @@ function seEsc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Compact, email-client-friendly summary body (inline styles). The gateway wraps
+// this in the branded shell, so this is just the inner content.
+function summaryEmailBody(f, doc, incidentCount = 0) {
+  const pilotName = f?.pilot?.name || (typeof f?.pilot === "string" ? f.pilot : "—");
+  const kpis = [
+    ["Coverage", f?.coverageKm > 0 ? f.coverageKm + " km²" : "—"],
+    ["Avg altitude", f?.altitude > 0 ? f.altitude + " m" : "—"],
+    ["Flight time", f?.duration && f.duration !== "00:00:00" ? f.duration : "—"],
+    ["Incidents", incidentCount > 0 ? incidentCount + " flagged" : "None"],
+  ];
+  const kpiCells = kpis.map(([k, v]) =>
+    `<td style="padding:8px 10px;background:#f7f8fa;border:1px solid #e6e8ee;border-radius:8px">
+       <div style="font-size:10px;color:#7a8294;text-transform:uppercase;letter-spacing:.05em">${seEsc(k)}</div>
+       <div style="font-size:15px;font-weight:700;margin-top:2px">${seEsc(v)}</div></td>`).join("");
+  const list = (items, empty) => {
+    const clean = (items || []).filter((x) => x && x.trim());
+    return clean.length ? `<ul style="margin:6px 0 14px;padding-left:18px">${clean.map((x) => `<li style="margin-bottom:4px">${seEsc(x)}</li>`).join("")}</ul>`
+      : `<p style="color:#8a92a3;font-style:italic;margin:6px 0 14px">${empty}</p>`;
+  };
+  return `
+    <h2 style="font-size:18px;margin:0 0 2px">${seEsc(doc.headline || f?.area || "Flight summary")}</h2>
+    <div style="color:#5b6479;font-size:12px;margin-bottom:14px">${seEsc(doc.meta || `${f?.id || ""} · ${pilotName}`)}</div>
+    ${doc.intro && doc.intro.trim() ? `<p style="margin:0 0 16px">${seEsc(doc.intro)}</p>` : ""}
+    <table style="width:100%;border-collapse:separate;border-spacing:6px;margin:0 -6px 16px"><tr>${kpiCells}</tr></table>
+    <h3 style="font-size:13px;margin:18px 0 4px;color:#1d4ed8">Key findings</h3>
+    ${list(doc.findings, "No findings recorded.")}
+    <h3 style="font-size:13px;margin:18px 0 4px;color:#1d4ed8">Recommended actions</h3>
+    ${list(doc.actions, "No recommended actions.")}
+    ${doc.signoff && doc.signoff.trim() ? `<p style="color:#5b6479;font-size:12.5px;margin-top:16px;padding-top:12px;border-top:1px solid #e6e8ee">${seEsc(doc.signoff)}</p>` : ""}`;
+}
+
 function buildReportHtml(f, doc, media, imgUrls, incidentCount = 0) {
   const pilotName = f?.pilot?.name || (typeof f?.pilot === "string" ? f.pilot : "—");
   const aircraft = f?.uav ? [f.uav.id, f.uav.model].filter(Boolean).join(" · ") : "—";
@@ -386,9 +417,30 @@ function SummaryEmailView({ flight }) {
   async function sendSummary() {
     if (!recipients.length) { toast({ kind: "warn", title: "No recipients", msg: "Add at least one recipient email." }); return; }
     setSending(true);
-    await window.__supabase.from("notifications").insert({ type: "summary", payload: { flight: f?.id }, recipients: recipients.map(r => r.email) });
+    const sb = window.__supabase;
+    const emails = recipients.map(r => r.email).filter(Boolean);
+    // Log it for the in-app bell + record.
+    await sb.from("notifications").insert({ type: "summary", payload: { flight: f?.id }, recipients: emails });
+    // Real delivery via the stream gateway (Resend). Best-effort — falls back to
+    // "recorded" if email isn't configured / the gateway is unreachable.
+    let sent = 0, emailed = false;
+    try {
+      const origin = window.location.origin;
+      const gatewayBase = (() => { try { return new URL(import.meta.env.VITE_STREAM_URL || origin, origin).origin; } catch { return origin; } })();
+      const token = (await sb.auth.getSession()).data?.session?.access_token || "";
+      const html = summaryEmailBody(f, doc, flightIncidents.length);
+      const subject = `Pilot Ops — Post-flight summary · ${f?.id || ""}`.trim();
+      const r = await fetch(`${gatewayBase}/send-summary`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flightId: f?.dbId, token, recipients: emails, subject, html }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) { sent = j.sent || 0; emailed = sent > 0; }
+    } catch { /* gateway unreachable — leave as recorded */ }
     setSending(false);
-    toast({ kind: "success", title: "Summary sent", msg: `${recipients.length} recipient${recipients.length === 1 ? "" : "s"} notified.` });
+    toast(emailed
+      ? { kind: "success", title: "Summary emailed", msg: `Delivered to ${sent} recipient${sent === 1 ? "" : "s"}.` }
+      : { kind: "info", title: "Summary recorded", msg: `${recipients.length} recipient(s) saved. Email delivery isn't configured yet — see the stream server's RESEND_API_KEY.` });
   }
   async function downloadPdf() {
     try {

@@ -27,6 +27,15 @@
 	handle /record {
 		reverse_proxy stream-gateway:9000
 	}
+	handle /notify-flight {
+		reverse_proxy stream-gateway:9000
+	}
+	handle /send-summary {
+		reverse_proxy stream-gateway:9000
+	}
+	handle /email-status {
+		reverse_proxy stream-gateway:9000
+	}
 
 	handle {
 		reverse_proxy web:80

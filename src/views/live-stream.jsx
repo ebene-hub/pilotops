@@ -416,6 +416,15 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
               // Actually end the mission in the DB so it leaves the active board.
               if (f?.dbId) {
                 await supabase.from("flights").update({ status: "completed", ended_at: new Date().toISOString() }).eq("id", f.dbId);
+                // In-app bell entry + real stakeholder "mission ended" email.
+                supabase.from("notifications").insert({ type: "mission_end", payload: { flight: f.id, area: f.area } }).then(() => {}, () => {});
+                try {
+                  const token = (await supabase.auth.getSession()).data?.session?.access_token || "";
+                  fetch(`${gatewayBase}/notify-flight`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ flightId: f.dbId, token, event: "end" }),
+                  }).catch(() => {});
+                } catch {}
                 try { await refresh(); } catch {}
               }
               onEndFlight && onEndFlight(f);

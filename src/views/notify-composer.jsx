@@ -174,6 +174,17 @@ function NotifyComposerView({ teamRoster, fieldConfig, onOpenStream }) {
       payload: { flight: flightId, area: form.coverageArea, link: streamLink },
       recipients,
     });
+    // Real stakeholder email (best-effort; never blocks the launch). The gateway
+    // loads the org's opted-in stakeholders server-side and sends via Resend.
+    try {
+      const origin = window.location.origin;
+      const gatewayBase = (() => { try { return new URL(import.meta.env.VITE_STREAM_URL || origin, origin).origin; } catch { return origin; } })();
+      const token = (await supabase.auth.getSession()).data?.session?.access_token || "";
+      fetch(`${gatewayBase}/notify-flight`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flightId: flight.id, token, event: "start" }),
+      }).catch(() => {});
+    } catch {}
     await supabase.from("audit_log").insert({
       actor_id: pilotRow?.memberId || null, actor_name: pilotMember?.name,
       kind: "mission_start", context: flightId, detail: { area: form.coverageArea },

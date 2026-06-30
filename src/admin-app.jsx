@@ -182,6 +182,7 @@ function AdminThemeToggle() {
 
 function aaNotifLabel(n) { const p = n.payload || {};
   if (n.type === "mission_start") return `Mission started · ${p.flight || ""}`;
+  if (n.type === "mission_end") return `Mission ended · ${p.flight || ""}`;
   if (n.type === "emergency") return `Emergency launch · ${p.flight || ""}`;
   if (n.type === "incident") return `Incident logged${p.severity ? " · " + p.severity : ""}`;
   if (n.type === "summary") return `Post-flight summary sent · ${p.flight || ""}`;

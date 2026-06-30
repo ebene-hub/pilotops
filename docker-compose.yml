@@ -68,6 +68,9 @@ services:
       # Reach Supabase over the internal API gateway on the shared network.
       SUPABASE_URL: ${STREAM_SUPABASE_URL:-http://kong:8000}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # Email (Resend) for mission notices + summaries; blank disables email.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      MAIL_FROM: ${MAIL_FROM:-Pilot Ops <onboarding@resend.dev>}
     volumes:
       - mediamtx_recordings:/recordings
     networks:

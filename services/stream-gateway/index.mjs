@@ -31,6 +31,10 @@ const RECORDING_MAX_BYTES = Number(process.env.RECORDING_MAX_MB || 45) * 1024 * 
 // Clips that uploaded are already deleted; this only reaps the leftover
 // (oversized/failed) files after a window long enough to retrieve them.
 const RECORDING_RETENTION_DAYS = Number(process.env.RECORDING_RETENTION_DAYS || 7);
+// Email (Resend). Set RESEND_API_KEY + MAIL_FROM to enable real delivery; without
+// the key, email endpoints no-op gracefully (the in-app notification still logs).
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const MAIL_FROM = process.env.MAIL_FROM || "Pilot Ops <onboarding@resend.dev>";
 
 if (!URL || !SERVICE_KEY) {
   console.error("stream-gateway: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
@@ -150,6 +154,109 @@ app.get("/record", async (req, res) => {
   if (!v.ok) return res.status(401).json({ ok: false, reason: v.reason });
   res.json({ ok: true, recording: await getPathRecord(flightId) });
 });
+
+// ---- Email (Resend) ---------------------------------------------------------
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// Send one email per recipient (so stakeholders never see each other's address).
+// Returns { ok, sent }. No-ops cleanly when email isn't configured.
+async function sendEmailEach(recipients, subject, html) {
+  if (!RESEND_API_KEY) { log("email skipped — RESEND_API_KEY not set"); return { ok: false, sent: 0, reason: "email not configured" }; }
+  const list = [...new Set((recipients || []).map((e) => (e || "").trim().toLowerCase()).filter((e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)))].slice(0, 100);
+  let sent = 0;
+  for (const to of list) {
+    try {
+      const r = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from: MAIL_FROM, to, subject, html }),
+      });
+      if (r.ok) sent++;
+      else log("email send failed", r.status, (await r.text().catch(() => "")).slice(0, 160));
+    } catch (e) { log("email error", e.message); }
+  }
+  return { ok: sent > 0, sent };
+}
+
+// Validate the caller is a member of the flight's org (lighter than the publish
+// check — any signed-in org member may trigger notices for their org's flight).
+async function memberForFlight(token, flightId) {
+  if (!token || !flightId) return { ok: false };
+  const { data: u } = await admin.auth.getUser(token);
+  if (!u?.user) return { ok: false };
+  const [{ data: flight }, { data: profile }] = await Promise.all([
+    admin.from("flights").select("id, code, area, org_id, status, started_at, ended_at, pilot_id").eq("id", flightId).maybeSingle(),
+    admin.from("profiles").select("org_id, full_name").eq("id", u.user.id).maybeSingle(),
+  ]);
+  if (!flight || !profile || flight.org_id !== profile.org_id) return { ok: false };
+  return { ok: true, flight, userName: profile.full_name };
+}
+
+const brandWrap = (title, bodyHtml) => `<!doctype html><html><body style="margin:0;background:#f4f6fb;padding:24px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0b1220">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e6e8ee">
+    <div style="background:linear-gradient(135deg,#2563eb,#1d4ed8);padding:20px 24px;color:#fff">
+      <div style="font-weight:700;font-size:15px;letter-spacing:.2px">Pilot Ops</div>
+      <div style="font-size:12px;opacity:.85;margin-top:2px">${esc(title)}</div>
+    </div>
+    <div style="padding:22px 24px;font-size:14px;line-height:1.6">${bodyHtml}</div>
+    <div style="padding:14px 24px;background:#f7f8fa;border-top:1px solid #e6e8ee;font-size:11px;color:#7a8294">
+      You're receiving this because you're a registered stakeholder. Sent automatically by Pilot Ops.
+    </div>
+  </div></body></html>`;
+
+function flightEmailHtml(f, isStart, byName) {
+  const code = f.code || (f.id ? f.id.slice(0, 8) : "—");
+  const when = new Date(isStart ? (f.started_at || Date.now()) : (f.ended_at || Date.now())).toLocaleString();
+  const rows = [
+    ["Mission", code],
+    ["Area", f.area || "—"],
+    [isStart ? "Started" : "Ended", when],
+  ];
+  if (isStart && byName) rows.push(["Pilot in command", byName]);
+  const table = rows.map(([k, v]) => `<tr><td style="padding:6px 0;color:#5b6479;width:150px">${esc(k)}</td><td style="padding:6px 0;font-weight:600">${esc(v)}</td></tr>`).join("");
+  const lead = isStart
+    ? `A mission has just <strong>started</strong> and is now live.`
+    : `A mission has <strong>ended</strong>. A post-flight summary may follow.`;
+  return brandWrap(isStart ? "Mission started" : "Mission ended",
+    `<p style="margin:0 0 14px">${lead}</p><table style="width:100%;border-collapse:collapse;font-size:13px">${table}</table>`);
+}
+
+// Mission lifecycle notice → stakeholders who opted into 'pre-flight' notices.
+app.post("/notify-flight", async (req, res) => {
+  const flightId = (req.body?.flightId || "").trim();
+  const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const event = (req.body?.event || "start").toString();
+  const m = await memberForFlight(token, flightId);
+  if (!m.ok) return res.status(401).json({ ok: false, reason: "unauthorized" });
+  const f = m.flight;
+  const { data: stk } = await admin.from("stakeholders").select("email, notify").eq("org_id", f.org_id);
+  const recipients = (stk || []).filter((s) => s.email && (s.notify || []).includes("pre-flight")).map((s) => s.email);
+  if (!recipients.length) { log("notify-flight: no opted-in stakeholders", { flightId, event }); return res.json({ ok: true, sent: 0 }); }
+  const isStart = event !== "end";
+  const code = f.code || f.id.slice(0, 8);
+  const subject = isStart ? `Mission ${code} started — ${f.area || ""}`.trim() : `Mission ${code} ended — ${f.area || ""}`.trim();
+  const out = await sendEmailEach(recipients, subject, flightEmailHtml(f, isStart, m.userName));
+  log("notify-flight", { flightId, event, sent: out.sent });
+  res.json({ ok: true, sent: out.sent });
+});
+
+// Post-flight summary → the recipient emails chosen in the summary view. The
+// client supplies the rendered HTML + recipients (auth'd to the flight's org).
+app.post("/send-summary", async (req, res) => {
+  const flightId = (req.body?.flightId || "").trim();
+  const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const recipients = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
+  const subject = (req.body?.subject || "Pilot Ops — Post-flight summary").toString().slice(0, 200);
+  const html = (req.body?.html || "").toString().slice(0, 200000);
+  const m = await memberForFlight(token, flightId);
+  if (!m.ok) return res.status(401).json({ ok: false, reason: "unauthorized" });
+  if (!recipients.length || !html) return res.status(400).json({ ok: false, reason: "missing recipients or content" });
+  const out = await sendEmailEach(recipients, subject, brandWrap("Post-flight summary", html));
+  log("send-summary", { flightId, sent: out.sent });
+  res.json({ ok: true, sent: out.sent });
+});
+
+app.get("/email-status", (_req, res) => res.json({ configured: !!RESEND_API_KEY }));
 
 // ---- MediaMTX external auth -------------------------------------------------
 app.post("/auth", async (req, res) => {
