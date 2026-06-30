@@ -1188,6 +1188,256 @@ end; $$;
 grant execute on function resolve_pair_code(text) to authenticated;
 
 -- ============================================================
+-- 0013_public_watch.sql
+-- ============================================================
+-- Per-flight share_key → public, read-only watch link (no sign-in).
+alter table flights add column if not exists share_key text;
+update flights set share_key = encode(extensions.gen_random_bytes(9), 'hex') where share_key is null;
+alter table flights alter column share_key set default encode(extensions.gen_random_bytes(9), 'hex');
+
+create or replace function get_public_stream(p_flight uuid, p_key text)
+returns jsonb language plpgsql security definer set search_path = public, extensions as $$
+declare v_id uuid; v_code text; v_area text; v_status text; v_pilot text;
+begin
+  select f.id, f.code, f.area, f.status, p.full_name
+    into v_id, v_code, v_area, v_status, v_pilot
+    from flights f left join profiles p on p.id = f.pilot_id
+   where f.id = p_flight and f.share_key = p_key;
+  if v_id is null then return jsonb_build_object('ok', false); end if;
+  return jsonb_build_object('ok', true, 'id', v_id, 'code', v_code, 'area', v_area, 'status', v_status, 'pilot', v_pilot);
+end; $$;
+grant execute on function get_public_stream(uuid, text) to anon, authenticated;
+
+create or replace function get_public_chat(p_flight uuid, p_key text)
+returns jsonb language plpgsql security definer set search_path = public, extensions as $$
+begin
+  if not exists (select 1 from flights where id = p_flight and share_key = p_key) then
+    return jsonb_build_object('ok', false);
+  end if;
+  return jsonb_build_object('ok', true, 'messages', coalesce((
+    select jsonb_agg(jsonb_build_object('from', sender_name, 'role', sender_role, 'text', text, 'at', created_at) order by created_at)
+    from (select sender_name, sender_role, text, created_at from chat_messages where flight_id = p_flight order by created_at desc limit 100) t
+  ), '[]'::jsonb));
+end; $$;
+grant execute on function get_public_chat(uuid, text) to anon, authenticated;
+
+-- ============================================================
+-- 0014_public_chat_post.sql
+-- ============================================================
+-- Let public watch-link viewers post to the mission chat (org-stamped).
+create or replace function post_public_chat(p_flight uuid, p_key text, p_name text, p_text text)
+returns jsonb language plpgsql security definer set search_path = public, extensions as $$
+declare v_org uuid;
+begin
+  select org_id into v_org from flights where id = p_flight and share_key = p_key;
+  if v_org is null then return jsonb_build_object('ok', false); end if;
+  if coalesce(trim(p_text), '') = '' then return jsonb_build_object('ok', false); end if;
+  insert into chat_messages (flight_id, sender_id, sender_name, sender_role, text, org_id)
+  values (p_flight, null, left(coalesce(nullif(trim(p_name), ''), 'Guest'), 40), 'guest', left(p_text, 1000), v_org);
+  return jsonb_build_object('ok', true);
+end; $$;
+grant execute on function post_public_chat(uuid, text, text, text) to anon, authenticated;
+
+-- ============================================================
+-- 0015_auto_logbook.sql
+-- ============================================================
+-- Auto-populate the pilot logbook from completed flights (one entry per flight).
+create or replace function log_flight_on_complete()
+returns trigger language plpgsql security definer set search_path = public, extensions as $$
+declare v_minutes int; v_night boolean; v_model text;
+begin
+  if new.status = 'completed'
+     and (old.status is distinct from 'completed')
+     and new.pilot_id is not null
+     and not exists (select 1 from logbook_entries where flight_id = new.id)
+  then
+    v_minutes := case
+      when new.started_at is not null and new.ended_at is not null
+        then greatest(0, round(extract(epoch from (new.ended_at - new.started_at)) / 60))::int
+      else 0 end;
+    v_night := case
+      when new.started_at is not null
+        then (extract(hour from new.started_at) < 6 or extract(hour from new.started_at) >= 18)
+      else false end;
+    select model into v_model from aircraft where id = new.aircraft_id;
+    insert into logbook_entries
+      (pilot_id, flight_id, date, aircraft_type, conditions, duration_min, night, bvlos, notes, org_id)
+    values
+      (new.pilot_id, new.id, coalesce(new.ended_at, new.started_at, now())::date,
+       coalesce(v_model, 'UAV'), 'Auto', v_minutes, v_night, false, new.area, new.org_id);
+  end if;
+  return new;
+end; $$;
+
+drop trigger if exists trg_log_flight_complete on flights;
+create trigger trg_log_flight_complete
+  after update on flights for each row execute function log_flight_on_complete();
+
+-- ============================================================
+-- 0016_permanent_watch.sql
+-- ============================================================
+-- Permanent per-organization public watch link (stable watch_key).
+alter table organizations add column if not exists watch_key text;
+update organizations set watch_key = encode(extensions.gen_random_bytes(9), 'hex') where watch_key is null;
+alter table organizations alter column watch_key set default encode(extensions.gen_random_bytes(9), 'hex');
+create unique index if not exists organizations_watch_key_idx on organizations (watch_key);
+
+create or replace function get_active_public_stream(p_watch_key text)
+returns jsonb language plpgsql security definer set search_path = public, extensions as $$
+declare v_org uuid; r record;
+begin
+  select id into v_org from organizations where watch_key = p_watch_key;
+  if v_org is null then return jsonb_build_object('ok', false, 'reason', 'invalid'); end if;
+  select f.id, f.share_key, f.code, f.area, f.status, f.stream_status, p.full_name as pilot
+    into r
+    from flights f left join profiles p on p.id = f.pilot_id
+   where f.org_id = v_org and f.status = 'live'
+   order by f.started_at desc nulls last, f.created_at desc
+   limit 1;
+  if r.id is null then return jsonb_build_object('ok', false, 'reason', 'idle'); end if;
+  return jsonb_build_object('ok', true, 'flight', r.id, 'key', r.share_key, 'code', r.code,
+    'area', r.area, 'pilot', r.pilot, 'status', r.status, 'stream', r.stream_status);
+end; $$;
+grant execute on function get_active_public_stream(text) to anon, authenticated;
+
+-- ============================================================
+-- 0017_active_streams.sql
+-- ============================================================
+-- Multi-mission public watch: ALL currently-live missions for an org.
+create or replace function get_active_public_streams(p_watch_key text)
+returns jsonb language plpgsql security definer set search_path = public, extensions as $$
+declare v_org uuid; v_streams jsonb;
+begin
+  select id into v_org from organizations where watch_key = p_watch_key;
+  if v_org is null then return jsonb_build_object('ok', false, 'reason', 'invalid'); end if;
+  select coalesce(jsonb_agg(
+      jsonb_build_object('flight', f.id, 'key', f.share_key, 'code', f.code, 'area', f.area,
+        'pilot', p.full_name, 'status', f.status, 'stream', f.stream_status)
+      order by f.started_at desc nulls last, f.created_at desc), '[]'::jsonb)
+    into v_streams
+    from flights f left join profiles p on p.id = f.pilot_id
+   where f.org_id = v_org and f.status = 'live';
+  return jsonb_build_object('ok', true, 'streams', v_streams);
+end; $$;
+grant execute on function get_active_public_streams(text) to anon, authenticated;
+
+-- ============================================================
+-- 0018_relax_create.sql
+-- ============================================================
+-- Any signed-in org member may log an incident / create a report draft for self.
+drop policy if exists inc_insert on incidents;
+create policy inc_insert on incidents for insert to authenticated
+  with check (reporter_id = auth.uid());
+drop policy if exists rep_write on reports;
+create policy rep_write on reports for insert to authenticated
+  with check (author_id = auth.uid());
+
+-- ============================================================
+-- 0019_ingest_key.sql + 0020_short_ingest_key.sql
+-- ============================================================
+-- Per-flight PUBLISH credential for direct RTMP/SRT ingest (short, typeable).
+alter table flights add column if not exists ingest_key text;
+create or replace function gen_ingest_key()
+returns text language sql volatile as $$
+  select string_agg(substr('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 1 + floor(random() * 32)::int, 1), '')
+  from generate_series(1, 8);
+$$;
+update flights set ingest_key = gen_ingest_key() where ingest_key is null;
+alter table flights alter column ingest_key set default gen_ingest_key();
+
+-- ============================================================
+-- 0021_integrations.sql
+-- ============================================================
+-- Outgoing Slack/Teams/generic webhooks per org (pg_net fire-and-forget).
+create extension if not exists pg_net;
+
+create table if not exists integrations (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid references organizations(id) on delete cascade,
+  kind text not null, label text, url text not null,
+  active boolean default true, created_at timestamptz default now()
+);
+alter table integrations enable row level security;
+
+drop trigger if exists trg_org_id on integrations;
+create trigger trg_org_id before insert on integrations for each row execute function set_org_id();
+
+drop policy if exists integ_read on integrations;
+create policy integ_read   on integrations for select to authenticated using (org_id = auth_org());
+drop policy if exists integ_write on integrations;
+create policy integ_write  on integrations for insert to authenticated with check (org_id = auth_org() and auth_is_admin());
+drop policy if exists integ_update on integrations;
+create policy integ_update on integrations for update to authenticated using (org_id = auth_org() and auth_is_admin());
+drop policy if exists integ_del on integrations;
+create policy integ_del    on integrations for delete to authenticated using (org_id = auth_org() and auth_is_admin());
+
+-- ============================================================
+-- 0022_webhooks_flights.sql
+-- ============================================================
+-- Fire webhooks on incident insert + flight start/end via a shared dispatcher.
+create or replace function dispatch_webhooks(p_org uuid, p_text text, p_payload jsonb)
+returns void language plpgsql security definer set search_path = public, extensions as $$
+declare r record;
+begin
+  for r in select kind, url from integrations where org_id = p_org and active loop
+    begin
+      if r.kind = 'webhook' then perform net.http_post(r.url, p_payload);
+      else perform net.http_post(r.url, jsonb_build_object('text', p_text));
+      end if;
+    exception when others then null;
+    end;
+  end loop;
+end; $$;
+
+create or replace function notify_integrations()
+returns trigger language plpgsql security definer set search_path = public, extensions as $$
+declare msg text;
+begin
+  msg := format('Incident %s [%s] — %s%s',
+    coalesce(new.code, left(new.id::text, 8)),
+    upper(coalesce(new.severity, 'n/a')),
+    coalesce(new.description, new.type, 'incident'),
+    case when new.place is not null then ' @ ' || new.place else '' end);
+  perform dispatch_webhooks(new.org_id, msg, jsonb_build_object('event', 'incident', 'incident', to_jsonb(new)));
+  return new;
+end; $$;
+
+drop trigger if exists trg_notify_integrations on incidents;
+create trigger trg_notify_integrations after insert on incidents
+  for each row execute function notify_integrations();
+
+create or replace function notify_integrations_flight()
+returns trigger language plpgsql security definer set search_path = public, extensions as $$
+declare v_pilot text; v_code text; v_event text; msg text;
+begin
+  if tg_op = 'INSERT' then
+    if new.status <> 'live' then return new; end if;
+    v_event := 'started';
+  else
+    if new.status is not distinct from old.status then return new; end if;
+    if new.status = 'live' then v_event := 'started';
+    elsif new.status = 'completed' then v_event := 'ended';
+    else return new; end if;
+  end if;
+  select full_name into v_pilot from profiles where id = new.pilot_id;
+  v_code := coalesce(new.code, left(new.id::text, 8));
+  if v_event = 'started' then
+    msg := format('Mission %s started%s%s', v_code,
+      case when new.area is not null then ' — ' || new.area else '' end,
+      case when v_pilot is not null then ' · pilot ' || v_pilot else '' end);
+  else
+    msg := format('Mission %s ended%s', v_code,
+      case when new.area is not null then ' — ' || new.area else '' end);
+  end if;
+  perform dispatch_webhooks(new.org_id, msg, jsonb_build_object('event', 'flight_' || v_event, 'flight', to_jsonb(new)));
+  return new;
+end; $$;
+
+drop trigger if exists trg_notify_flight on flights;
+create trigger trg_notify_flight after insert or update on flights
+  for each row execute function notify_integrations_flight();
+
+-- ============================================================
 -- 0023_crew_exclusivity.sql
 -- ============================================================
 -- Stop the same person being committed to two LIVE missions at once (race-proof
