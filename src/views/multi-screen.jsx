@@ -1,36 +1,80 @@
 import React from "react";
-// Pilot Ops — Multi-screen ops grid (4 simultaneous pilot feeds)
-const { useState: msUseState } = React;
+import { supabase } from "../api/supabase.js";
+// Pilot Ops — Multi-screen ops grid (simultaneous pilot feeds)
+const { useState: msUseState, useRef: msUseRef } = React;
 
 function MultiScreenView({ basemap, onFocus }) {
   const [layout, setLayout] = msUseState("2x2"); // "2x2", "1+3", "focus"
   const [focused, setFocused] = msUseState(null);
+  const [slots, setSlots] = msUseState(4);       // how many tiles to show (Add tile grows this)
+  const [broadcast, setBroadcast] = msUseState("");
+  const [sending, setSending] = msUseState(false);
+  const wallRef = msUseRef(null);
+  const toast = useToast();
 
-  const gridStyle = {
-    "2x2": { gridTemplateColumns: "1fr 1fr", gridTemplateRows: "1fr 1fr" },
-    "1+3": { gridTemplateColumns: "2fr 1fr", gridTemplateRows: "1fr 1fr 1fr" },
-    "focus": { gridTemplateColumns: "3fr 1fr", gridTemplateRows: "1fr 1fr 1fr 1fr" }
-  }[layout];
+  const active = ACTIVE_FLIGHTS || [];
+  const totalTiles = Math.max(slots, active.length, 1);
+  const dynamicCols = totalTiles <= 1 ? 1 : totalTiles <= 4 ? 2 : totalTiles <= 9 ? 3 : 4;
+  // Keep the named presets for the default ≤4 wall; grow to a dynamic grid once
+  // "Add tile" (or >4 live flights) needs more room.
+  const usePreset = slots <= 4 && active.length <= 4;
+  const gridStyle = usePreset
+    ? {
+        "2x2": { gridTemplateColumns: "1fr 1fr", gridTemplateRows: "1fr 1fr" },
+        "1+3": { gridTemplateColumns: "2fr 1fr", gridTemplateRows: "1fr 1fr 1fr" },
+        "focus": { gridTemplateColumns: "3fr 1fr", gridTemplateRows: "1fr 1fr 1fr 1fr" }
+      }[layout]
+    : { gridTemplateColumns: `repeat(${dynamicCols}, 1fr)`, gridAutoRows: "1fr" };
+
+  const toggleFullscreen = () => {
+    const el = wallRef.current; if (!el) return;
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else (el.requestFullscreen?.() || Promise.reject()).catch(() => toast({ kind: "warn", title: "Fullscreen blocked", msg: "Your browser declined fullscreen." }));
+  };
+
+  const addTile = () => {
+    if (slots >= 9) { toast({ kind: "info", title: "Max tiles", msg: "The wall holds up to 9 feeds." }); return; }
+    setSlots(s => Math.min(9, s + 1));
+  };
+
+  // Broadcast a message into EVERY live mission's chat at once.
+  const sendBroadcast = async () => {
+    const text = broadcast.trim();
+    if (!text) return;
+    if (!active.length) { toast({ kind: "warn", title: "No live missions", msg: "There are no active flights to broadcast to." }); return; }
+    setSending(true);
+    const rows = active.filter(f => f.dbId).map(f => ({
+      flight_id: f.dbId, sender_id: window.__poUser?.id || null,
+      sender_name: window.__poUser?.name || "Ops", sender_role: "ops",
+      text: "📢 " + text,
+    }));
+    const { error } = await supabase.from("chat_messages").insert(rows);
+    setSending(false);
+    if (error) { toast({ kind: "warn", title: "Broadcast failed", msg: error.message }); return; }
+    setBroadcast("");
+    toast({ kind: "success", title: "Broadcast sent", msg: `Delivered to ${rows.length} live mission${rows.length === 1 ? "" : "s"}.` });
+  };
 
   return (
     <div className="main-content" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div className="page-head" style={{ marginBottom: 12 }}>
         <div>
           <h1 className="page-title">Multi-screen ops</h1>
-          <div className="page-sub">{ACTIVE_FLIGHTS.length} simultaneous feeds · synchronized telemetry</div>
+          <div className="page-sub">{active.length} simultaneous feeds · synchronized telemetry</div>
         </div>
         <div className="page-actions">
           <div className="row" style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 2 }}>
             {["2x2", "1+3", "focus"].map(l => (
-              <button key={l} className={"btn btn-sm " + (layout === l ? "btn-primary" : "btn-ghost")} onClick={() => setLayout(l)} style={{ height: 28 }}>{l}</button>
+              <button key={l} className={"btn btn-sm " + (layout === l ? "btn-primary" : "btn-ghost")} onClick={() => setLayout(l)} style={{ height: 28 }} disabled={!usePreset} title={usePreset ? "" : "Layout presets apply to ≤4 tiles"}>{l}</button>
             ))}
           </div>
-          <button className="btn"><Icon name="grid" size={13}/> Add tile</button>
-          <button className="btn"><Icon name="expand" size={13}/> Fullscreen</button>
+          <button className="btn" onClick={addTile} title="Add another monitoring tile"><Icon name="grid" size={13}/> Add tile</button>
+          <button className="btn" onClick={toggleFullscreen} title="Fullscreen the video wall"><Icon name="expand" size={13}/> Fullscreen</button>
         </div>
       </div>
 
-      {ACTIVE_FLIGHTS.length === 0 ? (
+      <div ref={wallRef} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "var(--bg)" }}>
+      {active.length === 0 ? (
         <div style={{ flex: 1, display: "grid", placeItems: "center", border: "1px dashed var(--border)", borderRadius: 10 }}>
           <div style={{ textAlign: "center", color: "var(--text-3)" }}>
             <Icon name="grid" size={34} stroke="var(--text-4)"/>
@@ -40,11 +84,11 @@ function MultiScreenView({ basemap, onFocus }) {
         </div>
       ) : (
         <div style={{ display: "grid", ...gridStyle, gap: 10, flex: 1, minHeight: 0 }}>
-          {ACTIVE_FLIGHTS.map((f, i) => (
+          {active.map((f, i) => (
             <FeedTile key={f.id} flight={f} index={i} layout={layout} onFocus={() => onFocus(f)} onPin={() => setFocused(f.id)}/>
           ))}
           {/* Fill the rest of the grid with placeholders so the layout reads as multi-screen */}
-          {Array.from({ length: Math.max(0, 4 - ACTIVE_FLIGHTS.length) }).map((_, i) => (
+          {Array.from({ length: Math.max(0, totalTiles - active.length) }).map((_, i) => (
             <div key={"ph" + i} style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 10, display: "grid", placeItems: "center", color: "var(--text-4)" }}>
               <div style={{ textAlign: "center" }}>
                 <Icon name="video" size={22} stroke="var(--text-4)"/>
@@ -54,17 +98,18 @@ function MultiScreenView({ basemap, onFocus }) {
           ))}
         </div>
       )}
+      </div>
 
       {/* Footer strip — ops chat / quick command */}
       <div style={{ marginTop: 10, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: 8, display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ display: "flex", gap: 6 }}>
-          {ACTIVE_FLIGHTS.map(f => (
+          {active.map(f => (
             <div key={f.id} title={f.pilot?.name || f.id} className="user-avatar" style={{ width: 28, height: 28, fontSize: 11, background: `linear-gradient(135deg, ${f.pilot?.color || "#2563eb"}, color-mix(in oklab, ${f.pilot?.color || "#2563eb"} 70%, #000))` }}>{f.pilot?.initials || "—"}</div>
           ))}
         </div>
         <div className="vdivider" style={{ height: 24 }}/>
-        <input className="input" placeholder="Broadcast to all pilots… (Enter to send)" style={{ flex: 1, border: "none", background: "transparent" }}/>
-        <button className="btn btn-primary btn-sm"><Icon name="send" size={12}/> Broadcast</button>
+        <input className="input" placeholder="Broadcast to all pilots… (Enter to send)" value={broadcast} onChange={e => setBroadcast(e.target.value)} onKeyDown={e => { if (e.key === "Enter") sendBroadcast(); }} style={{ flex: 1, border: "none", background: "transparent" }}/>
+        <button className="btn btn-primary btn-sm" onClick={sendBroadcast} disabled={sending || !broadcast.trim()}><Icon name="send" size={12}/> {sending ? "Sending…" : "Broadcast"}</button>
       </div>
     </div>
   );

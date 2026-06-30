@@ -78,6 +78,23 @@ object Supabase {
         }
     }
 
+    /** Push the controller's current GPS to the flight row (cur_lat/cur_lng) so it
+     *  shows on the Pilot Ops map. Best-effort; failures are swallowed by the caller. */
+    fun updateLocation(token: String, flightId: String, lat: Double, lng: Double): Result<Unit> = runCatching {
+        val body = JSONObject().put("cur_lat", lat).put("cur_lng", lng)
+        val req = Request.Builder()
+            .url("$base/rest/v1/flights?id=eq.$flightId")
+            .header("apikey", anon)
+            .header("Authorization", "Bearer $token")
+            .header("Content-Type", "application/json")
+            .header("Prefer", "return=minimal")
+            .patch(body.toString().toRequestBody(JSON))
+            .build()
+        http.newCall(req).execute().use { res ->
+            if (!res.isSuccessful) error("location update failed (${res.code})")
+        }
+    }
+
     /** Pre-authorise a cast: the gateway records a short-lived publish grant for
      *  this flight so the (token-less) RTMP push that follows is allowed.
      *  Succeeds (Result.success) when authorised; on denial fails with the

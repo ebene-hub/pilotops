@@ -12,6 +12,8 @@ seed-pilot.mjs
 GGIS-UAV-Companion-debug.apk
 *.apk
 
-# SSH private keys — never commit
+# SSH private keys — never commit (incl. editor/backup copies)
 *.pem
 *.key
+*.pem.*
+*.key.*

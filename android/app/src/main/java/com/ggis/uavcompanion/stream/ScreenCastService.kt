@@ -4,17 +4,24 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.Manifest
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.ggis.uavcompanion.R
 import com.ggis.uavcompanion.data.Supabase
 import com.ggis.uavcompanion.ui.CastActivity
@@ -49,6 +56,10 @@ class ScreenCastService : Service(), ConnectChecker {
     // Adapts the encoder bitrate to the real uplink (poor field internet) so the
     // cast backs off and recovers instead of saturating and freezing for viewers.
     private var bitrateAdapter: BitrateAdapter? = null
+    // Controller GPS → flight row (shown on the Pilot Ops map).
+    private var locationManager: LocationManager? = null
+    private var locationListener: LocationListener? = null
+    @Volatile private var lastLocSentMs = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -109,6 +120,7 @@ class ScreenCastService : Service(), ConnectChecker {
             lastMotionMs = System.currentTimeMillis(); healsSinceMotion = 0
             startEndWatch(token, flightId)
             startStallWatch()
+            startLocationUpdates(token, flightId)
         } catch (e: Exception) {
             CastBus.emit(CastStatus.Failed(e.message ?: "Could not start cast")); stopCast()
         }
@@ -172,9 +184,52 @@ class ScreenCastService : Service(), ConnectChecker {
         }
     }
 
+    private fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    // Stream the controller's GPS to the flight row (cur_lat/cur_lng) while casting,
+    // so the Pilot Ops map shows where the controller actually is — not the viewer's
+    // PC. Best-effort: if permission is denied or no provider, the cast is unaffected.
+    private fun startLocationUpdates(token: String, flightId: String) {
+        if (!hasLocationPermission() || token.isEmpty() || flightId.isEmpty()) return
+        val lm = getSystemService(LOCATION_SERVICE) as? LocationManager ?: return
+        locationManager = lm
+        val listener = object : LocationListener {
+            override fun onLocationChanged(loc: Location) {
+                val now = System.currentTimeMillis()
+                if (now - lastLocSentMs < LOC_INTERVAL_MS) return
+                lastLocSentMs = now
+                val lat = loc.latitude; val lng = loc.longitude
+                thread { Supabase.updateLocation(token, flightId, lat, lng) }
+            }
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+            @Deprecated("Required on API < 30")
+            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+        }
+        locationListener = listener
+        try {
+            if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER))
+                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, LOC_INTERVAL_MS, 5f, listener, Looper.getMainLooper())
+            if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER))
+                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, LOC_INTERVAL_MS, 5f, listener, Looper.getMainLooper())
+            // Seed immediately with the last known fix so the pin isn't blank.
+            val last = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            if (last != null) { val la = last.latitude; val lo = last.longitude; thread { Supabase.updateLocation(token, flightId, la, lo) } }
+        } catch (_: SecurityException) {}
+    }
+
+    private fun stopLocationUpdates() {
+        try { locationListener?.let { locationManager?.removeUpdates(it) } } catch (_: Exception) {}
+        locationListener = null; locationManager = null
+    }
+
     private fun stopCast() {
         polling = false
         bitrateAdapter = null
+        stopLocationUpdates()
         try { stream?.let { if (it.isStreaming) it.stopStream() } } catch (_: Exception) {}
         try { stream?.release() } catch (_: Exception) {}
         stream = null
@@ -237,7 +292,11 @@ class ScreenCastService : Service(), ConnectChecker {
             .setContentIntent(open)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            // Declare the location FGS type only when we actually hold the permission;
+            // passing it without permission throws on Android 14+.
+            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            if (hasLocationPermission()) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            startForeground(NOTIF_ID, notif, type)
         } else {
             startForeground(NOTIF_ID, notif)
         }
@@ -261,6 +320,8 @@ class ScreenCastService : Service(), ConnectChecker {
         // frame; sustained for STALL_MS we rebuild the capture surface.
         private const val MOTION_FLOOR_BPS = 350_000L
         private const val STALL_MS = 12_000L
+        // How often (min) to push the controller's GPS to the flight row.
+        private const val LOC_INTERVAL_MS = 8_000L
 
         fun start(ctx: Context, resultCode: Int, data: Intent, url: String, token: String, flightId: String) {
             val i = Intent(ctx, ScreenCastService::class.java).apply {

@@ -1,6 +1,5 @@
 import React from "react";
 import { supabase } from "../api/supabase.js";
-import { watchPosition } from "../api/geo.js";
 import { refresh } from "../store.jsx";
 // Pilot Ops — Live Stream viewer (single pilot) — telemetry, chat, screenshot, AI annotations
 const { useState: lsUseState, useEffect: lsUseEffect, useRef: lsUseRef } = React;
@@ -162,16 +161,20 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
     return () => { channels.forEach((ch) => { try { supabase.removeChannel(ch); } catch {} }); setViewers(0); };
   }, [f?.dbId]);
 
-  // Stream the pilot's real device position to the flight row while live.
+  // Show the CONTROLLER's location on the map (not this PC's). The GGIS UAV
+  // Companion app streams the controller's GPS to the flight's cur_lat/cur_lng
+  // while casting; we read it live here. The PC's browser location is no longer
+  // written — it could be far from the field (e.g. an HQ desk).
   lsUseEffect(() => {
     if (!f?.dbId) return;
-    let last = 0;
-    const stop = watchPosition((p) => {
-      setPos({ lat: p.lat, lng: p.lng });
-      const now = Date.now();
-      if (now - last > 5000) { last = now; supabase.from("flights").update({ cur_lat: p.lat, cur_lng: p.lng }).eq("id", f.dbId); }
-    });
-    return stop;
+    let channel;
+    supabase.from("flights").select("cur_lat, cur_lng").eq("id", f.dbId).maybeSingle()
+      .then(({ data }) => { if (data && data.cur_lat != null) setPos({ lat: data.cur_lat, lng: data.cur_lng }); });
+    channel = supabase.channel("flightpos:" + f.dbId)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "flights", filter: "id=eq." + f.dbId },
+        (p) => { if (p.new?.cur_lat != null) setPos({ lat: p.new.cur_lat, lng: p.new.cur_lng }); })
+      .subscribe();
+    return () => { channel && supabase.removeChannel(channel); };
   }, [f?.dbId]);
 
   const fmt = s => {

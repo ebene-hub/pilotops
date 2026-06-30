@@ -28,7 +28,9 @@ class CastActivity : AppCompatActivity() {
     private var casting = false
     private val main = Handler(Looper.getMainLooper())
 
-    private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { requestProjection() }
+    private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ensureLocationThenProject() }
+    // Location is optional — whatever the user picks, proceed to the cast.
+    private val locationPerm = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { requestProjection() }
 
     private val projection = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         val data = res.data
@@ -87,6 +89,18 @@ class CastActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            ensureLocationThenProject()
+        }
+    }
+
+    // Ask for location once (so the controller's position can show on the Pilot Ops
+    // map). It's optional — the cast proceeds whether granted or denied.
+    private fun ensureLocationThenProject() {
+        val haveLoc = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!haveLoc) {
+            locationPerm.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
         } else {
             requestProjection()
         }
