@@ -19,6 +19,7 @@ import "./views/admin-aircraft.jsx";
 import "./views/admin-pilot-dashboard.jsx";
 import "./views/admin-emergency-reviews.jsx";
 import "./views/admin-incidents.jsx";
+import "./views/admin-lockouts.jsx";
 import "./views/invites-store.jsx";
 import "./views/members-invites.jsx";
 

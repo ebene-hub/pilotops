@@ -36,6 +36,8 @@ function MultiScreenView({ basemap, onFocus }) {
     if (slots >= 9) { toast({ kind: "info", title: "Max tiles", msg: "The wall holds up to 9 feeds." }); return; }
     setSlots(s => Math.min(9, s + 1));
   };
+  const placeholders = Math.max(0, totalTiles - active.length);
+  const removeTile = () => setSlots(s => Math.max(1, s - 1));
 
   // Broadcast a message into EVERY live mission's chat at once.
   const sendBroadcast = async () => {
@@ -69,6 +71,7 @@ function MultiScreenView({ basemap, onFocus }) {
             ))}
           </div>
           <button className="btn" onClick={addTile} title="Add another monitoring tile"><Icon name="grid" size={13}/> Add tile</button>
+          <button className="btn" onClick={removeTile} disabled={placeholders === 0} title={placeholders === 0 ? "No empty tiles to remove" : "Remove an empty tile"}><Icon name="x" size={13}/> Remove tile</button>
           <button className="btn" onClick={toggleFullscreen} title="Fullscreen the video wall"><Icon name="expand" size={13}/> Fullscreen</button>
         </div>
       </div>
@@ -88,8 +91,9 @@ function MultiScreenView({ basemap, onFocus }) {
             <FeedTile key={f.id} flight={f} index={i} layout={layout} onFocus={() => onFocus(f)} onPin={() => setFocused(f.id)}/>
           ))}
           {/* Fill the rest of the grid with placeholders so the layout reads as multi-screen */}
-          {Array.from({ length: Math.max(0, totalTiles - active.length) }).map((_, i) => (
-            <div key={"ph" + i} style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 10, display: "grid", placeItems: "center", color: "var(--text-4)" }}>
+          {Array.from({ length: placeholders }).map((_, i) => (
+            <div key={"ph" + i} style={{ position: "relative", background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 10, display: "grid", placeItems: "center", color: "var(--text-4)" }}>
+              <button className="iconbtn" onClick={removeTile} title="Remove this tile" style={{ position: "absolute", top: 6, right: 6, width: 24, height: 24 }}><Icon name="x" size={12}/></button>
               <div style={{ textAlign: "center" }}>
                 <Icon name="video" size={22} stroke="var(--text-4)"/>
                 <div style={{ marginTop: 6, fontSize: 11.5 }}>Awaiting feed</div>

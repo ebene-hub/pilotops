@@ -124,7 +124,15 @@ function App() {
           <ViewRenderer view={view} basemap={t.basemap} setBasemap={setBasemap} activeFlight={activeFlight}
             onStartFlight={() => setView("notify")}
             onOpenStream={(f) => { setActiveFlight(f); setView("live"); }}
-            onEndFlight={() => setView("summary")}
+            onEndFlight={(f) => {
+              // The live view already refreshed the store, so the just-ended flight
+              // is now in RECENT_FLIGHTS with its final data (status, duration,
+              // coverage…). Hand that completed copy to the summary so it shows
+              // instantly — no manual refresh.
+              const ended = (window.RECENT_FLIGHTS || []).find(x => x.dbId === f?.dbId) || f;
+              setActiveFlight(ended);
+              setView("summary");
+            }}
             onEmergencyLaunched={(entry) => {
               // emergency-launch builds the real flight (with dbId) for us.
               const flight = entry.flightObj || {
@@ -270,6 +278,7 @@ function notifLabel(n) { const p = n.payload || {};
   if (n.type === "incident") return `Incident logged${p.severity ? " · " + p.severity : ""}`;
   if (n.type === "summary") return `Post-flight summary sent · ${p.flight || ""}`;
   if (n.type === "invite") return `Invite sent · ${p.email || ""}`;
+  if (n.type === "lockout") return `Pilot locked out · ${p.pilot || ""}`;
   return n.type; }
 function notifRelTime(ts) { const d = Date.now() - new Date(ts).getTime(); if (d < 60000) return "just now"; if (d < 3600000) return Math.floor(d / 60000) + "m ago"; if (d < 86400000) return Math.floor(d / 3600000) + "h ago"; return Math.floor(d / 86400000) + "d ago"; }
 function notifIcon(t) { return t === "emergency" || t === "incident" ? "warn" : t === "summary" ? "mail" : t === "invite" ? "mail" : "drone"; }

@@ -11,6 +11,7 @@ const ADMIN_NAV = [
   { group: "Safety", items: [
     { id: "emergency-reviews", label: "Emergency reviews", icon: "warn" },
     { id: "incidents",         label: "Incident log",      icon: "warn" },
+    { id: "lockouts",          label: "Pilot lockouts",    icon: "shield" },
   ]},
   { group: "Organization", items: [
     { id: "members",       label: "Members & invites",     icon: "users" },
@@ -36,6 +37,7 @@ const ADMIN_TITLES = {
   "pilot-dash":       ["Dashboards",        "Pilot performance"],
   "emergency-reviews": ["Safety",           "Emergency reviews"],
   incidents:          ["Safety",            "Incident log"],
+  lockouts:           ["Safety",            "Pilot lockouts"],
   members:            ["Organization",      "Members & invites"],
   team:               ["Organization",      "Team roster"],
   roles:         ["Organization",      "Roles & permissions"],
@@ -184,9 +186,10 @@ function aaNotifLabel(n) { const p = n.payload || {};
   if (n.type === "incident") return `Incident logged${p.severity ? " · " + p.severity : ""}`;
   if (n.type === "summary") return `Post-flight summary sent · ${p.flight || ""}`;
   if (n.type === "invite") return `Invite sent · ${p.email || ""}`;
+  if (n.type === "lockout") return `Pilot locked out · ${p.pilot || ""}`;
   return n.type; }
 function aaNotifRt(ts) { const d = Date.now() - new Date(ts).getTime(); if (d < 60000) return "just now"; if (d < 3600000) return Math.floor(d / 60000) + "m ago"; if (d < 86400000) return Math.floor(d / 3600000) + "h ago"; return Math.floor(d / 86400000) + "d ago"; }
-function aaNotifIcon(t) { return t === "emergency" || t === "incident" ? "warn" : t === "summary" || t === "invite" ? "mail" : "drone"; }
+function aaNotifIcon(t) { return t === "lockout" ? "shield" : t === "emergency" || t === "incident" ? "warn" : t === "summary" || t === "invite" ? "mail" : "drone"; }
 
 function AdminNotificationsBell() {
   const [open, setOpen] = aaAppUseState(false);
@@ -226,7 +229,7 @@ function AdminNotificationsBell() {
             {visible.length === 0 ? <div className="muted" style={{ padding: 20, textAlign: "center", fontSize: 12.5 }}>No notifications.</div>
               : visible.map((n, i) => { const ur = isUnread(n); return (
                 <div key={i} style={{ display: "flex", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--border)", background: ur ? "var(--accent-soft)" : "transparent" }}>
-                  <div style={{ width: 28, height: 28, borderRadius: 7, background: n.type === "emergency" ? "color-mix(in oklab, var(--danger) 12%, transparent)" : "var(--surface)", border: "1px solid var(--border)", color: n.type === "emergency" ? "var(--danger)" : "var(--accent)", display: "grid", placeItems: "center", flexShrink: 0 }}><Icon name={aaNotifIcon(n.type)} size={13}/></div>
+                  <div style={{ width: 28, height: 28, borderRadius: 7, background: (n.type === "emergency" || n.type === "lockout") ? "color-mix(in oklab, var(--danger) 12%, transparent)" : "var(--surface)", border: "1px solid var(--border)", color: (n.type === "emergency" || n.type === "lockout") ? "var(--danger)" : "var(--accent)", display: "grid", placeItems: "center", flexShrink: 0 }}><Icon name={aaNotifIcon(n.type)} size={13}/></div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 12.5, color: "var(--text)", fontWeight: ur ? 600 : 400 }}>{aaNotifLabel(n)}</div>
                     <div className="muted mono" style={{ fontSize: 10.5, marginTop: 2 }}>{aaNotifRt(n.created_at)}</div>
@@ -271,6 +274,7 @@ function AdminViewRenderer({ view, teamRoster, setTeamRoster, fieldConfig, setFi
     case "pilot-dash":         return <AdminPilotDashboardView/>;
     case "emergency-reviews":  return <AdminEmergencyReviewView/>;
     case "incidents":          return <AdminPage title="Incident log" sub="Every incident logged by crew, saved to the incidents table. Filter and export to CSV."><AdminIncidentsView/></AdminPage>;
+    case "lockouts":           return <AdminPage title="Pilot lockouts" sub="Pilots are locked for 15 minutes after 3 wrong launch codes. Override to let a pilot retry immediately."><AdminLockoutsView/></AdminPage>;
     case "members":            return <AdminPage title="Members & invites" sub="Everyone who can sign in to Pilot Ops. Invite new members by email — they register via a single-use link."><MembersInvitesView/></AdminPage>;
     case "team":               return <AdminPage title="Team roster" sub="Field crew and pilot codes. Pilots pick from this list when starting a mission — codes prevent impersonation."><TeamRosterTab teamRoster={teamRoster} setTeamRoster={setTeamRoster}/></AdminPage>;
     case "roles":         return <AdminPage title="Roles & permissions" sub="What each role can read, write, or approve."><RolesView/></AdminPage>;
