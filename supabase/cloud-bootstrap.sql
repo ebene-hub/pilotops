@@ -1595,6 +1595,7 @@ create table if not exists org_email_settings (
   from_name     text, from_email text,
   smtp_host     text, smtp_port int, smtp_secure boolean default true, smtp_username text,
   smtp_password text, resend_api_key text,
+  smtp_allow_invalid_cert boolean not null default false,
   active        boolean not null default false,
   updated_at    timestamptz default now()
 );
@@ -1610,7 +1611,7 @@ begin
   return jsonb_build_object(
     'exists', true, 'provider', r.provider, 'from_name', r.from_name, 'from_email', r.from_email,
     'smtp_host', r.smtp_host, 'smtp_port', r.smtp_port, 'smtp_secure', r.smtp_secure,
-    'smtp_username', r.smtp_username, 'active', r.active,
+    'smtp_username', r.smtp_username, 'smtp_allow_invalid_cert', r.smtp_allow_invalid_cert, 'active', r.active,
     'has_smtp_password', r.smtp_password is not null and r.smtp_password <> '',
     'has_resend_key', r.resend_api_key is not null and r.resend_api_key <> '');
 end; $$;
@@ -1623,11 +1624,12 @@ begin
   if not auth_is_admin() then raise exception 'admin only'; end if;
   insert into org_email_settings(
       org_id, provider, from_name, from_email, smtp_host, smtp_port, smtp_secure,
-      smtp_username, smtp_password, resend_api_key, active, updated_at)
+      smtp_username, smtp_password, resend_api_key, smtp_allow_invalid_cert, active, updated_at)
   values (
       v_org, coalesce(p->>'provider','smtp'), p->>'from_name', p->>'from_email',
       p->>'smtp_host', nullif(p->>'smtp_port','')::int, coalesce((p->>'smtp_secure')::boolean, true),
       p->>'smtp_username', nullif(p->>'smtp_password',''), nullif(p->>'resend_api_key',''),
+      coalesce((p->>'smtp_allow_invalid_cert')::boolean, false),
       coalesce((p->>'active')::boolean, false), now())
   on conflict (org_id) do update set
       provider      = coalesce(p->>'provider', org_email_settings.provider),
@@ -1636,6 +1638,7 @@ begin
       smtp_secure   = coalesce((p->>'smtp_secure')::boolean, true), smtp_username = p->>'smtp_username',
       smtp_password = coalesce(nullif(p->>'smtp_password',''), org_email_settings.smtp_password),
       resend_api_key = coalesce(nullif(p->>'resend_api_key',''), org_email_settings.resend_api_key),
+      smtp_allow_invalid_cert = coalesce((p->>'smtp_allow_invalid_cert')::boolean, false),
       active        = coalesce((p->>'active')::boolean, false), updated_at = now();
 end; $$;
 grant execute on function set_org_email_settings(jsonb) to authenticated;

@@ -19,6 +19,7 @@ function AdminEmailSettingsView() {
   const [secure, setSecure] = esUseState(false);
   const [username, setUsername] = esUseState("");
   const [password, setPassword] = esUseState("");
+  const [allowInvalidCert, setAllowInvalidCert] = esUseState(false);
   const [apiKey, setApiKey] = esUseState("");
   const [active, setActive] = esUseState(false);
   const [hasPwd, setHasPwd] = esUseState(false);
@@ -40,6 +41,7 @@ function AdminEmailSettingsView() {
     setPort(data.smtp_port || 587);
     setSecure(!!data.smtp_secure);
     setUsername(data.smtp_username || "");
+    setAllowInvalidCert(!!data.smtp_allow_invalid_cert);
     setActive(!!data.active);
     setHasPwd(!!data.has_smtp_password);
     setHasKey(!!data.has_resend_key);
@@ -52,6 +54,7 @@ function AdminEmailSettingsView() {
     const payload = {
       provider, from_name: fromName.trim(), from_email: fromEmail.trim(), active,
       smtp_host: host.trim(), smtp_port: String(port || ""), smtp_secure: secure, smtp_username: username.trim(),
+      smtp_allow_invalid_cert: allowInvalidCert,
       smtp_password: password,      // blank = keep existing
       resend_api_key: apiKey,       // blank = keep existing
     };
@@ -131,6 +134,10 @@ function AdminEmailSettingsView() {
                 <div><span style={label}>Password {hasPwd && <span className="muted" style={{ fontWeight: 400 }}>· saved</span>}</span>
                   <input className="input mono" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder={hasPwd ? "•••••••• (leave blank to keep)" : "SMTP password"}/></div>
               </div>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, marginBottom: 8, color: "var(--text-2)" }}>
+                <input type="checkbox" checked={allowInvalidCert} onChange={e => setAllowInvalidCert(e.target.checked)} style={{ marginTop: 2 }}/>
+                <span>Allow mismatched/self-signed TLS certificate <span className="muted">— tick this if the test fails with a “certificate” / “altnames” error (common on shared cPanel hosting). The connection stays encrypted; only the cert name check is skipped.</span></span>
+              </label>
             </>
           ) : (
             <div style={{ marginBottom: 14 }}>

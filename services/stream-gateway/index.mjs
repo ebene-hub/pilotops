@@ -177,14 +177,15 @@ async function transportForOrg(orgId) {
       const from = fromStr(s.from_name, s.from_email);
       if (s.provider === "smtp" && s.smtp_host) {
         return { kind: "smtp", from: from || MAIL_FROM, host: s.smtp_host, port: s.smtp_port || 587,
-          secure: s.smtp_secure !== false, user: s.smtp_username || "", pass: s.smtp_password || "" };
+          secure: s.smtp_secure !== false, user: s.smtp_username || "", pass: s.smtp_password || "",
+          allowInvalidCert: s.smtp_allow_invalid_cert === true };
       }
       if (s.provider === "resend" && s.resend_api_key) {
         return { kind: "resend", from: from || MAIL_FROM, key: s.resend_api_key };
       }
     }
   }
-  if (SMTP_HOST) return { kind: "smtp", from: MAIL_FROM, host: SMTP_HOST, port: SMTP_PORT, secure: SMTP_SECURE, user: SMTP_USER, pass: SMTP_PASS };
+  if (SMTP_HOST) return { kind: "smtp", from: MAIL_FROM, host: SMTP_HOST, port: SMTP_PORT, secure: SMTP_SECURE, user: SMTP_USER, pass: SMTP_PASS, allowInvalidCert: String(process.env.SMTP_ALLOW_INVALID_CERT || "false") === "true" };
   if (RESEND_API_KEY) return { kind: "resend", from: MAIL_FROM, key: RESEND_API_KEY };
   return null;
 }
@@ -211,18 +212,24 @@ async function sendEmailEach(orgId, recipients, subject, html, attachments) {
   const smtpAtt = (attachments || []).map((a) => ({ filename: a.filename, path: a.url }));
   let smtp = null;
   if (tp.kind === "smtp") {
-    smtp = nodemailer.createTransport({ host: tp.host, port: tp.port, secure: tp.secure, auth: tp.user ? { user: tp.user, pass: tp.pass } : undefined });
+    smtp = nodemailer.createTransport({
+      host: tp.host, port: tp.port, secure: tp.secure,
+      auth: tp.user ? { user: tp.user, pass: tp.pass } : undefined,
+      // Shared hosting often presents a cert for a different name than the mail
+      // host; allow it when the org opted in (connection is still encrypted).
+      tls: tp.allowInvalidCert ? { rejectUnauthorized: false } : undefined,
+    });
   }
-  let sent = 0;
+  let sent = 0, lastErr = "";
   for (const to of list) {
     try {
       if (tp.kind === "resend") await resendSend(tp, to, subject, html, attachments);
       else await smtp.sendMail({ from: tp.from, to, subject, html, attachments: smtpAtt });
       sent++;
-    } catch (e) { log("email send failed", e.message); }
+    } catch (e) { lastErr = e.message; log("email send failed", e.message); }
   }
   try { smtp?.close(); } catch {}
-  return { ok: sent > 0, sent };
+  return { ok: sent > 0, sent, reason: sent > 0 ? undefined : lastErr };
 }
 
 // Validate the caller is a member of the flight's org (lighter than the publish
