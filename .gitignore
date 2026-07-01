@@ -17,3 +17,7 @@ GGIS-UAV-Companion-debug.apk
 *.key
 *.pem.*
 *.key.*
+
+# Android release signing keystore — never commit
+*.jks
+*.keystore

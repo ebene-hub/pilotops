@@ -28,10 +28,28 @@ android {
         viewBinding = true
     }
 
+    // Release signing. Credentials are passed at build time (-P… or gradle.properties)
+    // so the keystore + passwords are never committed. If RELEASE_STORE_FILE is
+    // unset, a release build stays unsigned (debug builds use the debug keystore).
+    signingConfigs {
+        create("release") {
+            val ksPath = prop("RELEASE_STORE_FILE", "")
+            if (ksPath.isNotEmpty()) {
+                storeFile = file(ksPath)
+                storePassword = prop("RELEASE_STORE_PASSWORD", "")
+                keyAlias = prop("RELEASE_KEY_ALIAS", "")
+                keyPassword = prop("RELEASE_KEY_PASSWORD", "")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (prop("RELEASE_STORE_FILE", "").isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
