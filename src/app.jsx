@@ -120,6 +120,7 @@ function App() {
       <Sidebar nav={navWithBadges()} view={view} setView={setView} collapsed={t.sidebarCollapsed && !isNarrow} onToggle={() => setTweak("sidebarCollapsed", !t.sidebarCollapsed)} onMobileClose={() => setMobileNavOpen(false)}/>
       <div className="main-col">
         <Topbar crumbs={breadcrumbs} view={view} sector={t.sector} setSector={v => setTweak("sector", v)} onMobileMenu={() => setMobileNavOpen(true)} onOpenPalette={() => setPaletteOpen(true)} t={t} setTweak={setTweak}/>
+        <OrgDeletionBanner/>
         <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
           <ViewRenderer view={view} basemap={t.basemap} setBasemap={setBasemap} activeFlight={activeFlight}
             onStartFlight={() => setView("notify")}
@@ -314,6 +315,21 @@ function NotificationDropdown({ items, onMarkRead, onClear }) {
             </div>
           ); })}
       </div>
+    </div>
+  );
+}
+
+// Informational banner for members while the org is scheduled for deletion.
+// (Only an admin can cancel it, from the Admin console.)
+function OrgDeletionBanner() {
+  const [st, setSt] = appUseState(null);
+  appUseEffect(() => { supabase.rpc("org_deletion_status").then(({ data }) => setSt(data || null)).catch(() => {}); }, []);
+  if (!st?.scheduled) return null;
+  const when = new Date(st.delete_after).toLocaleString();
+  return (
+    <div style={{ background: "color-mix(in oklab, var(--danger) 12%, var(--surface))", borderBottom: "1px solid var(--danger)", padding: "9px 16px", fontSize: 12.5, display: "flex", alignItems: "center", gap: 10 }}>
+      <Icon name="warn" size={14} stroke="var(--danger)"/>
+      <span style={{ flex: 1 }}>This organization is scheduled for <strong style={{ color: "var(--danger)" }}>permanent deletion</strong> on <strong>{when}</strong>. Contact your administrator if this is a mistake.</span>
     </div>
   );
 }

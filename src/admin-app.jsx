@@ -31,6 +31,7 @@ const ADMIN_NAV = [
     { id: "integrations",  label: "API & integrations",    icon: "link" },
     { id: "email",         label: "Email delivery",        icon: "mail" },
     { id: "audit",         label: "Audit log",             icon: "reports" },
+    { id: "danger",        label: "Delete organization",   icon: "warn" },
   ]},
 ];
 
@@ -50,6 +51,7 @@ const ADMIN_TITLES = {
   integrations:  ["System",            "API & integrations"],
   email:         ["System",            "Email delivery"],
   audit:         ["System",            "Audit log"],
+  danger:        ["System",            "Delete organization"],
 };
 
 const ADMIN_TWEAK_DEFAULTS = {
@@ -93,10 +95,29 @@ function AdminApp() {
       <AdminSidebar nav={ADMIN_NAV} view={view} setView={setView} onMobileClose={() => setMobileNavOpen(false)}/>
       <div className="main-col">
         <AdminTopbar crumbs={crumbs} onMobileMenu={() => setMobileNavOpen(true)}/>
+        <OrgDeletionBanner onManage={() => setView("danger")}/>
         <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
           <AdminViewRenderer view={view} teamRoster={teamRoster} setTeamRoster={setTeamRoster} fieldConfig={fieldConfig} setFieldConfig={setFieldConfig}/>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Org-wide banner shown while the organization is scheduled for deletion.
+function OrgDeletionBanner({ onManage }) {
+  const [st, setSt] = aaAppUseState(null);
+  aaAppUseEffect(() => {
+    const sb = window.__supabase; if (!sb) return;
+    sb.rpc("org_deletion_status").then(({ data }) => setSt(data || null)).catch(() => {});
+  }, []);
+  if (!st?.scheduled) return null;
+  const when = new Date(st.delete_after).toLocaleString();
+  return (
+    <div style={{ background: "color-mix(in oklab, var(--danger) 12%, var(--surface))", borderBottom: "1px solid var(--danger)", padding: "9px 16px", fontSize: 12.5, display: "flex", alignItems: "center", gap: 10 }}>
+      <Icon name="warn" size={14} stroke="var(--danger)"/>
+      <span style={{ flex: 1 }}>This organization is scheduled for <strong style={{ color: "var(--danger)" }}>permanent deletion</strong> on <strong>{when}</strong> — all data will be erased.</span>
+      <button className="btn btn-sm" onClick={onManage}>Review / cancel</button>
     </div>
   );
 }
@@ -303,6 +324,7 @@ function AdminViewRenderer({ view, teamRoster, setTeamRoster, fieldConfig, setFi
     case "sectors":       return <AdminPage title="Sectors & presets" sub="Industry-specific defaults for incident types and places."><SectorsView/></AdminPage>;
     case "integrations":  return <AdminPage title="API & integrations" sub="Connect Pilot Ops to your existing tools."><IntegrationsView/></AdminPage>;
     case "email":         return <AdminPage title="Email delivery" sub="Send mission notices & post-flight summaries through your own SMTP server or Resend key."><AdminEmailSettingsView/></AdminPage>;
+    case "danger":        return <AdminPage title="Delete organization" sub="Permanently delete this organization and all its data, with a 48-hour grace period."><AdminDangerView/></AdminPage>;
     case "audit":         return <AdminPage title="Audit log" sub="Every configuration change is logged here."><AuditView/></AdminPage>;
     default:              return null;
   }

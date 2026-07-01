@@ -505,10 +505,42 @@ async function cleanupRecordings() {
   }
 }
 
+// ---- permanent org deletion (48h grace elapsed) -----------------------------
+// An admin schedules deletion (request_org_deletion → delete_after = now+48h).
+// Once that time passes, purge the org for good: remove its Storage objects and
+// member auth accounts, then delete the org row (all its data cascades via the
+// org_id FKs). Runs hourly; a per-org try/catch keeps one failure from blocking
+// the rest.
+async function sweepDeletedOrgs() {
+  let orgs;
+  try {
+    const { data } = await admin.from("organizations").select("id, name").lt("delete_after", new Date().toISOString());
+    orgs = data || [];
+  } catch { return; }
+  for (const o of orgs) {
+    try {
+      // 1. Storage: remove this org's media files (rows cascade, files don't).
+      const { data: media } = await admin.from("media").select("storage_path").eq("org_id", o.id);
+      const paths = (media || []).map((m) => m.storage_path).filter(Boolean);
+      for (let i = 0; i < paths.length; i += 100) {
+        try { await admin.storage.from(MEDIA_BUCKET).remove(paths.slice(i, i + 100)); } catch {}
+      }
+      // 2. Auth accounts of every member.
+      const { data: profs } = await admin.from("profiles").select("id").eq("org_id", o.id);
+      for (const p of (profs || [])) { try { await admin.auth.admin.deleteUser(p.id); } catch {} }
+      // 3. The org row — cascades all remaining data (flights, incidents, …).
+      await admin.from("organizations").delete().eq("id", o.id);
+      log("org permanently deleted (48h grace elapsed)", { org: o.id, name: o.name });
+    } catch (e) { log("org deletion sweep error", { org: o.id, err: e.message }); }
+  }
+}
+
 app.listen(PORT, () => {
   log(`stream-gateway listening on :${PORT}`);
   setInterval(reconcile, POLL_MS);
   setInterval(scanRecordings, Math.max(POLL_MS, 15000));
   cleanupRecordings();
   setInterval(cleanupRecordings, 6 * 60 * 60 * 1000); // every 6h
+  sweepDeletedOrgs();
+  setInterval(sweepDeletedOrgs, 60 * 60 * 1000); // hourly
 });
