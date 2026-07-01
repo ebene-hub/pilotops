@@ -21,6 +21,7 @@ function AdminEmailSettingsView() {
   const [password, setPassword] = esUseState("");
   const [allowInvalidCert, setAllowInvalidCert] = esUseState(false);
   const [apiKey, setApiKey] = esUseState("");
+  const [liveUrl, setLiveUrl] = esUseState("");
   const [active, setActive] = esUseState(false);
   const [hasPwd, setHasPwd] = esUseState(false);
   const [hasKey, setHasKey] = esUseState(false);
@@ -42,6 +43,7 @@ function AdminEmailSettingsView() {
     setSecure(!!data.smtp_secure);
     setUsername(data.smtp_username || "");
     setAllowInvalidCert(!!data.smtp_allow_invalid_cert);
+    setLiveUrl(data.live_url || "");
     setActive(!!data.active);
     setHasPwd(!!data.has_smtp_password);
     setHasKey(!!data.has_resend_key);
@@ -54,7 +56,7 @@ function AdminEmailSettingsView() {
     const payload = {
       provider, from_name: fromName.trim(), from_email: fromEmail.trim(), active,
       smtp_host: host.trim(), smtp_port: String(port || ""), smtp_secure: secure, smtp_username: username.trim(),
-      smtp_allow_invalid_cert: allowInvalidCert,
+      smtp_allow_invalid_cert: allowInvalidCert, live_url: liveUrl.trim(),
       smtp_password: password,      // blank = keep existing
       resend_api_key: apiKey,       // blank = keep existing
     };
@@ -146,6 +148,12 @@ function AdminEmailSettingsView() {
               <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>From email must be on a domain verified in your Resend account.</div>
             </div>
           )}
+
+          <div style={{ marginBottom: 14, marginTop: 4 }}>
+            <span style={label}>Live stream link <span className="muted" style={{ fontWeight: 400 }}>(button in mission-start emails)</span></span>
+            <input className="input mono" value={liveUrl} onChange={e => setLiveUrl(e.target.value)} placeholder="https://ggis.app/dashboard/public/…?page=uav-live-stream" style={{ fontSize: 11.5 }}/>
+            <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Recipients get a “▶ Watch live stream” button pointing here. Change it any time — e.g. if your public watch/embed link changes. Leave blank for no button.</div>
+          </div>
 
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginTop: 4 }}>
             <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)}/>

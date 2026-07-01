@@ -258,7 +258,7 @@ const brandWrap = (title, bodyHtml) => `<!doctype html><html><body style="margin
     </div>
   </div></body></html>`;
 
-function flightEmailHtml(f, isStart, byName) {
+function flightEmailHtml(f, isStart, byName, liveUrl) {
   const code = f.code || (f.id ? f.id.slice(0, 8) : "—");
   const when = new Date(isStart ? (f.started_at || Date.now()) : (f.ended_at || Date.now())).toLocaleString();
   const rows = [
@@ -271,8 +271,13 @@ function flightEmailHtml(f, isStart, byName) {
   const lead = isStart
     ? `A mission has just <strong>started</strong> and is now live.`
     : `A mission has <strong>ended</strong>. A post-flight summary may follow.`;
+  // "Watch live" button only on the start email, only when a link is configured.
+  const safeLive = isStart && liveUrl && /^https?:\/\//i.test(liveUrl) ? liveUrl : "";
+  const button = safeLive
+    ? `<div style="margin-top:20px"><a href="${esc(safeLive)}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:11px 20px;border-radius:8px;font-weight:600;font-size:13px">▶ Watch live stream</a></div>`
+    : "";
   return brandWrap(isStart ? "Mission started" : "Mission ended",
-    `<p style="margin:0 0 14px">${lead}</p><table style="width:100%;border-collapse:collapse;font-size:13px">${table}</table>`);
+    `<p style="margin:0 0 14px">${lead}</p><table style="width:100%;border-collapse:collapse;font-size:13px">${table}</table>${button}`);
 }
 
 // Mission lifecycle notice → stakeholders who opted into 'pre-flight' notices.
@@ -283,13 +288,16 @@ app.post("/notify-flight", async (req, res) => {
   const m = await memberForFlight(token, flightId);
   if (!m.ok) return res.status(401).json({ ok: false, reason: "unauthorized" });
   const f = m.flight;
-  const { data: stk } = await admin.from("stakeholders").select("email, notify").eq("org_id", f.org_id);
+  const [{ data: stk }, { data: es }] = await Promise.all([
+    admin.from("stakeholders").select("email, notify").eq("org_id", f.org_id),
+    admin.from("org_email_settings").select("live_url").eq("org_id", f.org_id).maybeSingle(),
+  ]);
   const recipients = (stk || []).filter((s) => s.email && (s.notify || []).includes("pre-flight")).map((s) => s.email);
   if (!recipients.length) { log("notify-flight: no opted-in stakeholders", { flightId, event }); return res.json({ ok: true, sent: 0 }); }
   const isStart = event !== "end";
   const code = f.code || f.id.slice(0, 8);
   const subject = isStart ? `Mission ${code} started — ${f.area || ""}`.trim() : `Mission ${code} ended — ${f.area || ""}`.trim();
-  const out = await sendEmailEach(f.org_id, recipients, subject, flightEmailHtml(f, isStart, m.userName));
+  const out = await sendEmailEach(f.org_id, recipients, subject, flightEmailHtml(f, isStart, m.userName, es?.live_url));
   log("notify-flight", { flightId, event, sent: out.sent });
   res.json({ ok: true, sent: out.sent });
 });
