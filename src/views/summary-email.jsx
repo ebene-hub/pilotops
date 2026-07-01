@@ -384,7 +384,7 @@ function defaultDoc(f) {
   return {
     headline: f?.area || "Flight summary",
     meta: `${f?.id || "—"} · ${pilotName}`,
-    intro: `Summary of mission ${f?.id || ""}${f?.area ? " — sweep of " + area : ""} flown with UAV ${uavId}. Edit this draft before sending.`,
+    intro: `This report summarizes mission ${f?.id || ""}${f?.area ? " over " + area : ""}, flown with UAV ${uavId}.`,
     findings: [],
     actions: [],
     signoff: "Filed by " + pilotName,
@@ -430,9 +430,19 @@ function SummaryEmailView({ flight }) {
       const token = (await sb.auth.getSession()).data?.session?.access_token || "";
       const html = summaryEmailBody(f, doc, flightIncidents.length);
       const subject = `Pilot Ops — Post-flight summary · ${f?.id || ""}`.trim();
+      // Attach the summary's media as real email attachments (the gateway fetches
+      // each signed URL and attaches it; oversized files are skipped server-side).
+      const attachments = [];
+      for (const m of media) {
+        if (!m.path) continue;
+        try {
+          const { data } = await sb.storage.from("media").createSignedUrl(m.path, 3600);
+          if (data?.signedUrl) attachments.push({ filename: m.name, url: data.signedUrl, size: m.size || 0 });
+        } catch {}
+      }
       const r = await fetch(`${gatewayBase}/send-summary`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flightId: f?.dbId, token, recipients: emails, subject, html }),
+        body: JSON.stringify({ flightId: f?.dbId, token, recipients: emails, subject, html, attachments }),
       });
       const j = await r.json().catch(() => ({}));
       if (r.ok && j.ok) { sent = j.sent || 0; emailed = sent > 0; }
@@ -458,7 +468,10 @@ function SummaryEmailView({ flight }) {
     }
   }
 
-  const storageKey = `po:summary:${f?.id || "none"}`;
+  // Key the saved draft by the flight's UUID, not its code. Codes (FL-####) are
+  // random and can repeat across flights, which previously made two flights share
+  // one draft — showing the wrong pilot's name/details in the summary.
+  const storageKey = `po:summary:${f?.dbId || f?.id || "none"}`;
   const [doc, setDoc] = seUseState(() => {
     try {
       const raw = localStorage.getItem(storageKey);

@@ -108,7 +108,9 @@ function AdminSidebar({ nav, view, setView, onMobileClose }) {
         <div className="brand-mark" style={{ background: "linear-gradient(135deg, #1e293b, #0f172a)" }}>PO</div>
         <div className="brand-text">
           Pilot Ops
-          <span className="brand-sub" style={{ color: "var(--accent)", fontWeight: 600, letterSpacing: "0.06em", fontSize: 10 }}>ADMIN CONSOLE</span>
+          <span className="brand-sub" style={{ color: "var(--accent)", fontWeight: 600, letterSpacing: "0.06em", fontSize: 10 }}>
+            ADMIN{window.__poAdminUser?.orgName ? " · " + window.__poAdminUser.orgName.toUpperCase() : " CONSOLE"}
+          </span>
         </div>
         <button className="iconbtn mobile-only" style={{ marginLeft: "auto", width: 28, height: 28 }} onClick={onMobileClose} title="Close nav">
           <Icon name="close" size={14}/>
@@ -159,6 +161,9 @@ function AdminSidebar({ nav, view, setView, onMobileClose }) {
             }}>
             <Icon name="logout" size={13}/>
           </button>
+        </div>
+        <div style={{ textAlign: "center", fontSize: 10, color: "var(--text-4)", marginTop: 10, letterSpacing: "0.02em" }}>
+          Pilot Ops · powered by <strong style={{ color: "var(--text-3)", fontWeight: 600 }}>GGIS</strong>
         </div>
       </div>
     </aside>

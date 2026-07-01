@@ -108,9 +108,12 @@ async function start() {
   window.__poUser.role = roles[0] || (prof?.is_admin ? "Admin" : "Member");
   window.__poUser.roles = roles;
 
-  // Permanent per-org public watch link key (org_read RLS returns only our org).
-  supabase.from("organizations").select("id, watch_key").maybeSingle()
-    .then(({ data: org }) => { if (org) { window.__poUser.orgId = org.id; window.__poUser.orgWatchKey = org.watch_key; } });
+  // Org identity + permanent watch key (org_read RLS returns only our org).
+  // Awaited so the org name is available when the shell first renders.
+  try {
+    const { data: org } = await supabase.from("organizations").select("id, name, watch_key").maybeSingle();
+    if (org) { window.__poUser.orgId = org.id; window.__poUser.orgName = org.name; window.__poUser.orgWatchKey = org.watch_key; }
+  } catch {}
 
   splash("Loading operations data…");
   await bootstrap();

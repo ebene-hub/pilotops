@@ -54,6 +54,12 @@ async function start() {
     role: profile.admin_role || "Admin", initials: profile.initials, isAdmin: true,
   };
 
+  // Org identity for the console header.
+  try {
+    const { data: org } = await supabase.from("organizations").select("id, name, watch_key").maybeSingle();
+    if (org) { window.__poAdminUser.orgId = org.id; window.__poAdminUser.orgName = org.name; window.__poAdminUser.orgWatchKey = org.watch_key; }
+  } catch {}
+
   splash("Loading console data…");
   await bootstrap();
 

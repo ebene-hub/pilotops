@@ -165,7 +165,7 @@ function Sidebar({ nav, view, setView, collapsed, onToggle, onMobileClose }) {
         {!collapsed && (
           <div className="brand-text">
             Pilot Ops
-            <span className="brand-sub">Logging & operations</span>
+            <span className="brand-sub">{window.__poUser?.orgName || "Logging & operations"}</span>
           </div>
         )}
         <button className="iconbtn mobile-only" style={{ marginLeft: "auto", width: 28, height: 28 }} onClick={onMobileClose} title="Close nav">
@@ -239,6 +239,11 @@ function Sidebar({ nav, view, setView, collapsed, onToggle, onMobileClose }) {
             </button>
           )}
         </div>
+        {!collapsed && (
+          <div style={{ textAlign: "center", fontSize: 10, color: "var(--text-4)", marginTop: 10, letterSpacing: "0.02em" }}>
+            Pilot Ops · powered by <strong style={{ color: "var(--text-3)", fontWeight: 600 }}>GGIS</strong>
+          </div>
+        )}
       </div>
     </aside>
   );

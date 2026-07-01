@@ -189,22 +189,26 @@ async function transportForOrg(orgId) {
   return null;
 }
 
-async function resendSend(tp, to, subject, html) {
+async function resendSend(tp, to, subject, html, attachments) {
+  const body = { from: tp.from, to, subject, html };
+  if (attachments?.length) body.attachments = attachments.map((a) => ({ filename: a.filename, path: a.url }));
   const r = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${tp.key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: tp.from, to, subject, html }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`resend ${r.status} ${(await r.text().catch(() => "")).slice(0, 140)}`);
 }
 
 // Send one email per recipient (so stakeholders never see each other's address).
-// Uses the org's transport, falling back to the server default. Returns {ok,sent}.
-async function sendEmailEach(orgId, recipients, subject, html) {
+// Uses the org's transport, falling back to the server default. `attachments` is
+// an optional [{filename, url}] the transport fetches. Returns {ok,sent}.
+async function sendEmailEach(orgId, recipients, subject, html, attachments) {
   const tp = await transportForOrg(orgId);
   if (!tp) { log("email skipped — no transport configured", { orgId }); return { ok: false, sent: 0, reason: "email not configured" }; }
   const list = [...new Set((recipients || []).map((e) => (e || "").trim().toLowerCase()).filter((e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)))].slice(0, 100);
   if (!list.length) return { ok: false, sent: 0, reason: "no valid recipients" };
+  const smtpAtt = (attachments || []).map((a) => ({ filename: a.filename, path: a.url }));
   let smtp = null;
   if (tp.kind === "smtp") {
     smtp = nodemailer.createTransport({ host: tp.host, port: tp.port, secure: tp.secure, auth: tp.user ? { user: tp.user, pass: tp.pass } : undefined });
@@ -212,8 +216,8 @@ async function sendEmailEach(orgId, recipients, subject, html) {
   let sent = 0;
   for (const to of list) {
     try {
-      if (tp.kind === "resend") await resendSend(tp, to, subject, html);
-      else await smtp.sendMail({ from: tp.from, to, subject, html });
+      if (tp.kind === "resend") await resendSend(tp, to, subject, html, attachments);
+      else await smtp.sendMail({ from: tp.from, to, subject, html, attachments: smtpAtt });
       sent++;
     } catch (e) { log("email send failed", e.message); }
   }
@@ -294,7 +298,19 @@ app.post("/send-summary", async (req, res) => {
   const m = await memberForFlight(token, flightId);
   if (!m.ok) return res.status(401).json({ ok: false, reason: "unauthorized" });
   if (!recipients.length || !html) return res.status(400).json({ ok: false, reason: "missing recipients or content" });
-  const out = await sendEmailEach(m.flight.org_id, recipients, subject, brandWrap("Post-flight summary", html));
+  // Attach media, but keep the email deliverable: skip files over ~20MB and cap
+  // the total at ~24MB (most mail servers reject larger). Skipped files are still
+  // linked from the app; huge videos just aren't email-attached.
+  const PER = 20 * 1024 * 1024, TOTAL = 24 * 1024 * 1024;
+  const attachments = []; let acc = 0;
+  for (const a of (Array.isArray(req.body?.attachments) ? req.body.attachments : [])) {
+    if (!a?.url || !a?.filename) continue;
+    const sz = Number(a.size) || 0;
+    if (sz > PER || acc + sz > TOTAL) continue;
+    acc += sz;
+    attachments.push({ filename: String(a.filename).slice(0, 200), url: String(a.url) });
+  }
+  const out = await sendEmailEach(m.flight.org_id, recipients, subject, brandWrap("Post-flight summary", html), attachments);
   log("send-summary", { flightId, sent: out.sent });
   res.json({ ok: true, sent: out.sent });
 });
