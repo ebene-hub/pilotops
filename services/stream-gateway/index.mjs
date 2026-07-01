@@ -12,6 +12,7 @@
 //
 // Uses the SERVICE ROLE key (server-side only — never shipped to a browser).
 import express from "express";
+import nodemailer from "nodemailer";
 import { readFile, readdir, stat, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { createClient } from "@supabase/supabase-js";
@@ -31,10 +32,16 @@ const RECORDING_MAX_BYTES = Number(process.env.RECORDING_MAX_MB || 45) * 1024 * 
 // Clips that uploaded are already deleted; this only reaps the leftover
 // (oversized/failed) files after a window long enough to retrieve them.
 const RECORDING_RETENTION_DAYS = Number(process.env.RECORDING_RETENTION_DAYS || 7);
-// Email (Resend). Set RESEND_API_KEY + MAIL_FROM to enable real delivery; without
-// the key, email endpoints no-op gracefully (the in-app notification still logs).
+// Email. Per-org config (org_email_settings) wins; otherwise the server-wide
+// fallback below is used. Set EITHER a global SMTP server (SMTP_HOST…) or a global
+// Resend key. With neither configured (and no org config), email endpoints no-op.
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 const MAIL_FROM = process.env.MAIL_FROM || "Pilot Ops <onboarding@resend.dev>";
+const SMTP_HOST = process.env.SMTP_HOST || "";
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_SECURE = String(process.env.SMTP_SECURE || (SMTP_PORT === 465 ? "true" : "false")) === "true";
+const SMTP_USER = process.env.SMTP_USER || "";
+const SMTP_PASS = process.env.SMTP_PASS || "";
 
 if (!URL || !SERVICE_KEY) {
   console.error("stream-gateway: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
@@ -158,23 +165,59 @@ app.get("/record", async (req, res) => {
 // ---- Email (Resend) ---------------------------------------------------------
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+const fromStr = (name, email) => email ? (name ? `${name} <${email}>` : email) : "";
+
+// Resolve which mail transport to use for an org: its own active config first,
+// then the server-wide fallback (global SMTP, else global Resend). Returns null
+// when nothing is configured.
+async function transportForOrg(orgId) {
+  if (orgId) {
+    const { data: s } = await admin.from("org_email_settings").select("*").eq("org_id", orgId).maybeSingle();
+    if (s && s.active) {
+      const from = fromStr(s.from_name, s.from_email);
+      if (s.provider === "smtp" && s.smtp_host) {
+        return { kind: "smtp", from: from || MAIL_FROM, host: s.smtp_host, port: s.smtp_port || 587,
+          secure: s.smtp_secure !== false, user: s.smtp_username || "", pass: s.smtp_password || "" };
+      }
+      if (s.provider === "resend" && s.resend_api_key) {
+        return { kind: "resend", from: from || MAIL_FROM, key: s.resend_api_key };
+      }
+    }
+  }
+  if (SMTP_HOST) return { kind: "smtp", from: MAIL_FROM, host: SMTP_HOST, port: SMTP_PORT, secure: SMTP_SECURE, user: SMTP_USER, pass: SMTP_PASS };
+  if (RESEND_API_KEY) return { kind: "resend", from: MAIL_FROM, key: RESEND_API_KEY };
+  return null;
+}
+
+async function resendSend(tp, to, subject, html) {
+  const r = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${tp.key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: tp.from, to, subject, html }),
+  });
+  if (!r.ok) throw new Error(`resend ${r.status} ${(await r.text().catch(() => "")).slice(0, 140)}`);
+}
+
 // Send one email per recipient (so stakeholders never see each other's address).
-// Returns { ok, sent }. No-ops cleanly when email isn't configured.
-async function sendEmailEach(recipients, subject, html) {
-  if (!RESEND_API_KEY) { log("email skipped — RESEND_API_KEY not set"); return { ok: false, sent: 0, reason: "email not configured" }; }
+// Uses the org's transport, falling back to the server default. Returns {ok,sent}.
+async function sendEmailEach(orgId, recipients, subject, html) {
+  const tp = await transportForOrg(orgId);
+  if (!tp) { log("email skipped — no transport configured", { orgId }); return { ok: false, sent: 0, reason: "email not configured" }; }
   const list = [...new Set((recipients || []).map((e) => (e || "").trim().toLowerCase()).filter((e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)))].slice(0, 100);
+  if (!list.length) return { ok: false, sent: 0, reason: "no valid recipients" };
+  let smtp = null;
+  if (tp.kind === "smtp") {
+    smtp = nodemailer.createTransport({ host: tp.host, port: tp.port, secure: tp.secure, auth: tp.user ? { user: tp.user, pass: tp.pass } : undefined });
+  }
   let sent = 0;
   for (const to of list) {
     try {
-      const r = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ from: MAIL_FROM, to, subject, html }),
-      });
-      if (r.ok) sent++;
-      else log("email send failed", r.status, (await r.text().catch(() => "")).slice(0, 160));
-    } catch (e) { log("email error", e.message); }
+      if (tp.kind === "resend") await resendSend(tp, to, subject, html);
+      else await smtp.sendMail({ from: tp.from, to, subject, html });
+      sent++;
+    } catch (e) { log("email send failed", e.message); }
   }
+  try { smtp?.close(); } catch {}
   return { ok: sent > 0, sent };
 }
 
@@ -235,7 +278,7 @@ app.post("/notify-flight", async (req, res) => {
   const isStart = event !== "end";
   const code = f.code || f.id.slice(0, 8);
   const subject = isStart ? `Mission ${code} started — ${f.area || ""}`.trim() : `Mission ${code} ended — ${f.area || ""}`.trim();
-  const out = await sendEmailEach(recipients, subject, flightEmailHtml(f, isStart, m.userName));
+  const out = await sendEmailEach(f.org_id, recipients, subject, flightEmailHtml(f, isStart, m.userName));
   log("notify-flight", { flightId, event, sent: out.sent });
   res.json({ ok: true, sent: out.sent });
 });
@@ -251,12 +294,36 @@ app.post("/send-summary", async (req, res) => {
   const m = await memberForFlight(token, flightId);
   if (!m.ok) return res.status(401).json({ ok: false, reason: "unauthorized" });
   if (!recipients.length || !html) return res.status(400).json({ ok: false, reason: "missing recipients or content" });
-  const out = await sendEmailEach(recipients, subject, brandWrap("Post-flight summary", html));
+  const out = await sendEmailEach(m.flight.org_id, recipients, subject, brandWrap("Post-flight summary", html));
   log("send-summary", { flightId, sent: out.sent });
   res.json({ ok: true, sent: out.sent });
 });
 
-app.get("/email-status", (_req, res) => res.json({ configured: !!RESEND_API_KEY }));
+// Admin "send test" from the Email delivery settings page. Verifies the caller is
+// an admin, then sends one email to `to` using that admin's org transport.
+app.post("/send-test-email", async (req, res) => {
+  const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const to = (req.body?.to || "").toString().trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ ok: false, reason: "invalid recipient" });
+  const { data: u } = await admin.auth.getUser(token);
+  if (!u?.user) return res.status(401).json({ ok: false, reason: "unauthorized" });
+  const { data: profile } = await admin.from("profiles").select("org_id, is_admin").eq("id", u.user.id).maybeSingle();
+  if (!profile || !profile.is_admin) return res.status(403).json({ ok: false, reason: "admin only" });
+  const html = brandWrap("Email test", `<p>This is a test from Pilot Ops. If you received it, your organization's email delivery is configured correctly. 🎉</p>`);
+  const out = await sendEmailEach(profile.org_id, [to], "Pilot Ops — email test", html);
+  log("send-test-email", { org: profile.org_id, to, sent: out.sent });
+  if (!out.sent) return res.status(502).json({ ok: false, reason: out.reason || "send failed" });
+  res.json({ ok: true, sent: out.sent });
+});
+
+// Whether THIS org (or the server default) can send email.
+app.get("/email-status", async (req, res) => {
+  const token = (req.query?.token || "").toString().trim();
+  let orgId = null;
+  if (token) { const { data: u } = await admin.auth.getUser(token); if (u?.user) { const { data: p } = await admin.from("profiles").select("org_id").eq("id", u.user.id).maybeSingle(); orgId = p?.org_id || null; } }
+  const tp = await transportForOrg(orgId);
+  res.json({ configured: !!tp, provider: tp?.kind || null });
+});
 
 // ---- MediaMTX external auth -------------------------------------------------
 app.post("/auth", async (req, res) => {

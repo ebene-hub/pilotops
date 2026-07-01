@@ -32,10 +32,15 @@ services:
     environment:
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
-      # Email (Resend) for mission-start/end notices + post-flight summaries.
-      # Leave blank to disable email (endpoints no-op; in-app notifications still log).
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      # Email — server-wide fallback (each org can override in the admin console).
+      # Set a global SMTP server OR a global Resend key; blank = no fallback.
       MAIL_FROM: ${MAIL_FROM:-Pilot Ops <onboarding@resend.dev>}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
     volumes:
       - recordings:/recordings
     networks: [stream]

@@ -25,6 +25,9 @@
 	handle /send-summary {
 		reverse_proxy stream-gateway:9000
 	}
+	handle /send-test-email {
+		reverse_proxy stream-gateway:9000
+	}
 	handle /email-status {
 		reverse_proxy stream-gateway:9000
 	}

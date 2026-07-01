@@ -29,6 +29,7 @@ const ADMIN_NAV = [
   { group: "System", items: [
     { id: "sectors",       label: "Sectors & presets",     icon: "layers" },
     { id: "integrations",  label: "API & integrations",    icon: "link" },
+    { id: "email",         label: "Email delivery",        icon: "mail" },
     { id: "audit",         label: "Audit log",             icon: "reports" },
   ]},
 ];
@@ -47,6 +48,7 @@ const ADMIN_TITLES = {
   notifications: ["Workflows",         "Notification rules"],
   sectors:       ["System",            "Sectors & presets"],
   integrations:  ["System",            "API & integrations"],
+  email:         ["System",            "Email delivery"],
   audit:         ["System",            "Audit log"],
 };
 
@@ -295,6 +297,7 @@ function AdminViewRenderer({ view, teamRoster, setTeamRoster, fieldConfig, setFi
     case "notifications": return <AdminPage title="Notification rules" sub="Who gets notified, when, and via which channel."><NotificationsView/></AdminPage>;
     case "sectors":       return <AdminPage title="Sectors & presets" sub="Industry-specific defaults for incident types and places."><SectorsView/></AdminPage>;
     case "integrations":  return <AdminPage title="API & integrations" sub="Connect Pilot Ops to your existing tools."><IntegrationsView/></AdminPage>;
+    case "email":         return <AdminPage title="Email delivery" sub="Send mission notices & post-flight summaries through your own SMTP server or Resend key."><AdminEmailSettingsView/></AdminPage>;
     case "audit":         return <AdminPage title="Audit log" sub="Every configuration change is logged here."><AuditView/></AdminPage>;
     default:              return null;
   }
