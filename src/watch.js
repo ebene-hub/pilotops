@@ -359,6 +359,16 @@ async function orgTick() {
   }
 }
 
+// Pause tile decoding while the page is hidden/minimized (frees CPU/GPU and stops
+// pulling stream bandwidth in the background); resume when visible.
+document.addEventListener("visibilitychange", () => {
+  const hidden = document.hidden;
+  for (const t of tiles.values()) {
+    const v = t.video; if (!v) continue;
+    if (hidden) { try { v.pause(); } catch {} } else { v.play?.().catch(() => {}); }
+  }
+});
+
 // ---- init -------------------------------------------------------------------
 wireUi();
 wireSend();

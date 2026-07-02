@@ -113,6 +113,20 @@ function LiveVideoFeed({ showAnnotations, flash, duration, flight, recording, pl
     return () => { cancelled = true; clearTimeout(retry); teardown(); };
   }, [flight?.dbId, flight?.id]);
 
+  // Pause decoding while this window/tab is hidden or minimized, so a background
+  // player doesn't compete for CPU/GPU with a visible one (and stops wasting
+  // bandwidth). Resumes instantly when visible again. The freeze watchdog ignores
+  // paused video, so this won't trigger a false reconnect.
+  lvUseEffect(() => {
+    const onVis = () => {
+      const v = videoRef.current; if (!v) return;
+      if (document.hidden) { try { v.pause(); } catch {} }
+      else { v.play?.().catch(() => {}); }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
   const f = flight || {};
   const rootStyle = fill
     ? { position: "absolute", inset: 0, width: "100%", height: "100%", background: "#000", overflow: "hidden" }
