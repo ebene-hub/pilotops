@@ -32,7 +32,12 @@ form.addEventListener("submit", async (e) => {
   // sign-in even if the project requires email confirmation first.
   const { error: suErr } = await supabase.auth.signUp({
     email, password: pwd,
-    options: { data: { full_name: name, initials: initialsOf(name), pending_org_name: orgName } },
+    options: {
+      data: { full_name: name, initials: initialsOf(name), pending_org_name: orgName },
+      // After confirming their email, send them to admin sign-in, where the org
+      // is created on first sign-in (see admin-login.js).
+      emailRedirectTo: window.location.origin + "/admin-login.html",
+    },
   });
   if (suErr) { fail(suErr.message); submitBtn.disabled = false; submitLabel.textContent = "Create admin account"; return; }
 
