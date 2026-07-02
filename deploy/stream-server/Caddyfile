@@ -31,6 +31,9 @@
 	handle /auth-email-hook {
 		reverse_proxy stream-gateway:9000
 	}
+	handle /email-hook {
+		reverse_proxy stream-gateway:9000
+	}
 	handle /send-test-email {
 		reverse_proxy stream-gateway:9000
 	}

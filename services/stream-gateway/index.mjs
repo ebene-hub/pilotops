@@ -323,7 +323,8 @@ function authEmailHtml(type, verifyUrl, otp) {
 }
 
 // Supabase Send Email Hook: sends auth emails through our own transport.
-app.post("/auth-email-hook", async (req, res) => {
+// Accept both path names so whichever URL was configured in Supabase works.
+app.post(["/auth-email-hook", "/email-hook"], async (req, res) => {
   const raw = req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || {});
   if (!verifyStandardWebhook(SEND_EMAIL_HOOK_SECRET, req.headers, raw)) {
     log("auth-email-hook: signature check failed");
