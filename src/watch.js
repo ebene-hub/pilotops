@@ -15,6 +15,9 @@ const HLS_BASE = (import.meta.env.VITE_STREAM_HLS_URL || "/hls").replace(/\/$/, 
 // Target receiver buffer (ms). A small buffer absorbs jitter/packet loss so poor
 // connections don't freeze constantly; still well under a second of latency.
 const JITTER_MS = Number(import.meta.env.VITE_STREAM_JITTER_MS) || 500;
+// Data-saver: snapshot refresh interval (ms) — a low-bandwidth preview for a
+// secondary tile (single-encoding stream, so "low-res" = periodic still).
+const SAVER_INTERVAL = 6000;
 
 const params = new URLSearchParams(location.search);
 const singleFlight = params.get("f") || "";
@@ -86,11 +89,32 @@ function watchTile(t, myGen) {
 // poor-network viewer still gets the feed.
 function escalate(t) { t.whepFails = (t.whepFails || 0) + 1; if (t.whepFails >= 2) t.useHls = true; }
 
+// Data-saver: briefly connect, grab one frame to the tile's canvas, disconnect,
+// and repeat every SAVER_INTERVAL — near-zero sustained CPU/bandwidth.
+function snapshotTile(t, myGen) {
+  whepPlay(`${STREAM_BASE}/${t.flightId}/whep?key=${encodeURIComponent(t.key)}`, t.video)
+    .then(async (p) => {
+      if (myGen !== t.gen) { try { p.close(); } catch {} return; }
+      t.pc = p;
+      await new Promise((res) => { const to = setTimeout(res, 4500); t.video.onplaying = () => { clearTimeout(to); setTimeout(res, 350); }; });
+      if (myGen === t.gen && t.video.videoWidth && t.canvas) {
+        t.canvas.width = t.video.videoWidth; t.canvas.height = t.video.videoHeight;
+        t.canvas.getContext("2d").drawImage(t.video, 0, 0);
+        t.el.classList.add("live");
+      }
+      try { p.close(); } catch {}
+      t.pc = null; if (t.video) { t.video.onplaying = null; t.video.srcObject = null; }
+      if (myGen === t.gen) t.saverTimer = setTimeout(() => connectTile(t), SAVER_INTERVAL);
+    })
+    .catch(() => { if (myGen === t.gen) t.saverTimer = setTimeout(() => connectTile(t), SAVER_INTERVAL); });
+}
+
 function connectTile(t) {
   const myGen = ++t.gen;
-  clearInterval(t.stall);
+  clearInterval(t.stall); clearTimeout(t.saverTimer);
   try { t.pc?.close(); } catch {} t.pc = null;
   try { t.hls?.destroy(); } catch {} t.hls = null;
+  if (t.saver) return snapshotTile(t, myGen);
   if (t.useHls) return connectTileHls(t, myGen);
 
   whepPlay(`${STREAM_BASE}/${t.flightId}/whep?key=${encodeURIComponent(t.key)}`, t.video)
@@ -136,13 +160,15 @@ function addTile(s) {
   el.className = "tile";
   el.innerHTML =
     `<video autoplay muted playsinline></video>` +
+    `<canvas class="tile-snap"></canvas>` +
     `<div class="tile-wait"><span class="dot"></span>Connecting…</div>` +
+    `<button class="tile-saver" title="Data saver — low-bandwidth snapshot preview">🐢 Data saver</button>` +
     `<button class="tile-min" title="Minimize this feed" aria-label="Minimize this feed">${MIN_ICON}</button>` +
     `<button class="tile-max" title="Maximize this feed" aria-label="Maximize this feed">${MAX_ICON}</button>` +
     `<div class="tile-label"><span class="livedot"></span><b>${escapeHtml(s.code || "Live")}</b>` +
     `<span class="area">${escapeHtml(s.area || "")}${s.pilot ? " · " + escapeHtml(s.pilot) : ""}</span></div>`;
-  const t = { el, video: el.querySelector("video"), pc: null, gen: 0,
-    flightId: s.flight, key: s.key, label: s.code || "Live" };
+  const t = { el, video: el.querySelector("video"), canvas: el.querySelector("canvas"), pc: null, gen: 0,
+    saver: false, flightId: s.flight, key: s.key, label: s.code || "Live" };
   // A minimized tile lives in the dock as a live thumbnail; clicking it restores.
   el.addEventListener("click", () => {
     if (el.classList.contains("minimized")) restoreTile(t); else setFocus(t.flightId);
@@ -155,6 +181,14 @@ function addTile(s) {
   });
   el.querySelector(".tile-min").addEventListener("click", (e) => {
     e.stopPropagation(); minimizeTile(t);
+  });
+  // Data saver: toggle low-bandwidth snapshot preview for just this tile.
+  el.querySelector(".tile-saver").addEventListener("click", (e) => {
+    e.stopPropagation();
+    t.saver = !t.saver;
+    t.el.classList.toggle("saver", t.saver);
+    e.currentTarget.textContent = t.saver ? "⚡ Go live" : "🐢 Data saver";
+    connectTile(t);
   });
   tiles.set(s.flight, t);
   grid.appendChild(el);
@@ -185,7 +219,7 @@ function restoreTile(t) {
 function removeTile(id) {
   const t = tiles.get(id);
   if (!t) return;
-  t.gen++; clearInterval(t.stall); try { t.pc?.close(); } catch {} try { t.hls?.destroy(); } catch {}
+  t.gen++; clearInterval(t.stall); clearTimeout(t.saverTimer); try { t.pc?.close(); } catch {} try { t.hls?.destroy(); } catch {}
   t.el.remove();
   tiles.delete(id);
 }
