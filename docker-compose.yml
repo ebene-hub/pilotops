@@ -76,6 +76,8 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SEND_EMAIL_HOOK_SECRET: ${SEND_EMAIL_HOOK_SECRET:-}
+      AUTH_EMAIL_ORG_ID: ${AUTH_EMAIL_ORG_ID:-}
     volumes:
       - mediamtx_recordings:/recordings
     networks:

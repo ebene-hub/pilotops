@@ -13,6 +13,7 @@
 // Uses the SERVICE ROLE key (server-side only — never shipped to a browser).
 import express from "express";
 import nodemailer from "nodemailer";
+import crypto from "node:crypto";
 import { readFile, readdir, stat, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { createClient } from "@supabase/supabase-js";
@@ -42,6 +43,13 @@ const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
 const SMTP_SECURE = String(process.env.SMTP_SECURE || (SMTP_PORT === 465 ? "true" : "false")) === "true";
 const SMTP_USER = process.env.SMTP_USER || "";
 const SMTP_PASS = process.env.SMTP_PASS || "";
+// Supabase "Send Email Hook": auth emails (confirmation, password reset, magic
+// link) are POSTed here so they go through our own (cert-tolerant) transport.
+// SEND_EMAIL_HOOK_SECRET is the standard-webhooks secret from the Supabase hook;
+// AUTH_EMAIL_ORG_ID is the org whose mail config sends them (auth emails are
+// platform-level / pre-org, so we borrow a configured org's transport).
+const SEND_EMAIL_HOOK_SECRET = process.env.SEND_EMAIL_HOOK_SECRET || "";
+const AUTH_EMAIL_ORG_ID = process.env.AUTH_EMAIL_ORG_ID || "";
 
 if (!URL || !SERVICE_KEY) {
   console.error("stream-gateway: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
@@ -56,7 +64,9 @@ process.on("uncaughtException", (e) => console.log(new Date().toISOString(), "un
 const admin = createClient(URL, SERVICE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
 
 const app = express();
-app.use(express.json());
+// Stash the raw body so we can verify the standard-webhooks signature on the
+// Supabase auth-email hook (signature is computed over the exact bytes).
+app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }));
 app.use(express.urlencoded({ extended: false }));
 
 // CORS for the browser-facing endpoints (the Pilot Ops web app toggling
@@ -279,6 +289,61 @@ function flightEmailHtml(f, isStart, byName, liveUrl) {
   return brandWrap(isStart ? "Mission started" : "Mission ended",
     `<p style="margin:0 0 14px">${lead}</p><table style="width:100%;border-collapse:collapse;font-size:13px">${table}</table>${button}`);
 }
+
+// Verify a Standard Webhooks signature (Supabase auth hooks use this).
+// signedContent = "<id>.<timestamp>.<rawBody>"; sig = base64(HMAC-SHA256(key, ...)).
+function verifyStandardWebhook(secret, headers, rawBody) {
+  const id = headers["webhook-id"], ts = headers["webhook-timestamp"], sigHeader = headers["webhook-signature"];
+  if (!secret || !id || !ts || !sigHeader) return false;
+  // Reject stale timestamps (>5 min) to blunt replay.
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false;
+  const b64 = secret.replace(/^v1,/, "").replace(/^whsec_/, "");
+  let key; try { key = Buffer.from(b64, "base64"); } catch { return false; }
+  const expected = crypto.createHmac("sha256", key).update(`${id}.${ts}.${rawBody}`).digest("base64");
+  return String(sigHeader).split(" ").some((part) => {
+    const sig = part.includes(",") ? part.split(",")[1] : part;
+    try { return sig && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)); } catch { return false; }
+  });
+}
+
+function authEmailHtml(type, verifyUrl, otp) {
+  const t = {
+    signup:   ["Confirm your account", "Welcome to Pilot Ops. Confirm your email address to activate your account.", "Confirm email"],
+    email:    ["Confirm your account", "Confirm your email address to activate your account.", "Confirm email"],
+    recovery: ["Reset your password", "We received a request to reset your Pilot Ops password. Click below to choose a new one.", "Reset password"],
+    magiclink:["Your sign-in link", "Click below to sign in to Pilot Ops.", "Sign in"],
+    invite:   ["You're invited to Pilot Ops", "You've been invited to Pilot Ops. Click below to set up your account.", "Accept invite"],
+  }[type] || ["Pilot Ops", "Complete this action on your Pilot Ops account.", "Continue"];
+  return brandWrap(t[0], `
+    <p style="margin:0 0 18px">${esc(t[1])}</p>
+    <div style="margin:18px 0"><a href="${esc(verifyUrl)}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;font-size:14px">${esc(t[2])}</a></div>
+    ${otp ? `<p style="margin:14px 0 0;font-size:12.5px;color:#5b6479">Or enter this code: <strong style="font-family:monospace;font-size:16px;letter-spacing:2px">${esc(otp)}</strong></p>` : ""}
+    <p style="margin:14px 0 0;font-size:11.5px;color:#8a92a3">If the button doesn't work, copy this link:<br>${esc(verifyUrl)}</p>
+    <p style="margin:12px 0 0;font-size:11.5px;color:#8a92a3">If you didn't request this, you can ignore this email.</p>`);
+}
+
+// Supabase Send Email Hook: sends auth emails through our own transport.
+app.post("/auth-email-hook", async (req, res) => {
+  const raw = req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || {});
+  if (!verifyStandardWebhook(SEND_EMAIL_HOOK_SECRET, req.headers, raw)) {
+    log("auth-email-hook: signature check failed");
+    return res.status(401).json({ error: { http_code: 401, message: "invalid signature" } });
+  }
+  const p = req.body || {};
+  const email = p?.user?.email;
+  const ed = p?.email_data || {};
+  const type = ed.email_action_type || "signup";
+  if (!email || !ed.token_hash || !ed.site_url) return res.status(400).json({ error: { http_code: 400, message: "missing fields" } });
+  const verifyUrl = `${ed.site_url}/auth/v1/verify?token=${encodeURIComponent(ed.token_hash)}&type=${encodeURIComponent(type)}` +
+    (ed.redirect_to ? `&redirect_to=${encodeURIComponent(ed.redirect_to)}` : "");
+  const subject = type === "recovery" ? "Reset your Pilot Ops password"
+    : (type === "signup" || type === "email") ? "Confirm your Pilot Ops account"
+    : type === "invite" ? "You're invited to Pilot Ops" : "Your Pilot Ops sign-in link";
+  const out = await sendEmailEach(AUTH_EMAIL_ORG_ID || null, [email], subject, authEmailHtml(type, verifyUrl, ed.token));
+  if (!out.sent) { log("auth-email-hook send failed", { type, reason: out.reason }); return res.status(500).json({ error: { http_code: 500, message: out.reason || "send failed" } }); }
+  log("auth-email-hook sent", { type, email });
+  res.json({});   // 200 empty = Supabase proceeds (email handled by us)
+});
 
 function inviteEmailHtml(orgName, inviter, roles, message, link) {
   const roleStr = (roles || []).join(", ");

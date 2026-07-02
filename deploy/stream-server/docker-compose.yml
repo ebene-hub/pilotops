@@ -41,6 +41,9 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
+      # Supabase Send Email Hook (auth confirmation / reset via our transport).
+      SEND_EMAIL_HOOK_SECRET: ${SEND_EMAIL_HOOK_SECRET:-}
+      AUTH_EMAIL_ORG_ID: ${AUTH_EMAIL_ORG_ID:-}
     volumes:
       - recordings:/recordings
     networks: [stream]
