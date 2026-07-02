@@ -1689,6 +1689,15 @@ end; $$;
 grant execute on function org_deletion_status() to authenticated;
 
 -- ============================================================
+-- 0030_profiles_grant.sql
+-- ============================================================
+-- profiles has column-level grants (0010), so if role privileges ever reset the
+-- broad table SELECT can be lost — breaking admin login ("permission denied for
+-- table profiles"). Ensure the table grant is present. RLS still controls rows.
+grant select on public.profiles to authenticated, anon;
+grant update (phone, dob, gov_id, license_class, license_expiry, job_title) on public.profiles to authenticated;
+
+-- ============================================================
 -- seed.sql
 -- ============================================================
 -- Pilot Ops — seed CONFIG defaults only (no dummy people, flights, or fleet).
