@@ -334,8 +334,10 @@ app.post(["/auth-email-hook", "/email-hook"], async (req, res) => {
   const email = p?.user?.email;
   const ed = p?.email_data || {};
   const type = ed.email_action_type || "signup";
-  if (!email || !ed.token_hash || !ed.site_url) return res.status(400).json({ error: { http_code: 400, message: "missing fields" } });
-  const verifyUrl = `${ed.site_url}/auth/v1/verify?token=${encodeURIComponent(ed.token_hash)}&type=${encodeURIComponent(type)}` +
+  if (!email || !ed.token_hash) return res.status(400).json({ error: { http_code: 400, message: "missing fields" } });
+  // The verify endpoint lives on the Supabase PROJECT URL, not the app Site URL.
+  const base = (process.env.SUPABASE_URL || ed.site_url || "").replace(/\/$/, "");
+  const verifyUrl = `${base}/auth/v1/verify?token=${encodeURIComponent(ed.token_hash)}&type=${encodeURIComponent(type)}` +
     (ed.redirect_to ? `&redirect_to=${encodeURIComponent(ed.redirect_to)}` : "");
   const subject = type === "recovery" ? "Reset your Pilot Ops password"
     : (type === "signup" || type === "email") ? "Confirm your Pilot Ops account"
