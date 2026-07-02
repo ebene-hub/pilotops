@@ -21,3 +21,6 @@ GGIS-UAV-Companion-debug.apk
 # Android release signing keystore — never commit
 *.jks
 *.keystore
+
+# Packaged dist handoffs (build artifacts)
+pilotops-dist-*.zip
