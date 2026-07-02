@@ -7,6 +7,10 @@ const { useState: lvUseState, useEffect: lvUseEffect, useRef: lvUseRef } = React
 
 const STREAM_BASE = (import.meta.env.VITE_STREAM_URL || "/stream").replace(/\/$/, "");
 const HLS_BASE = (import.meta.env.VITE_STREAM_HLS_URL || "/hls").replace(/\/$/, "");
+// Data-saver: refresh the snapshot preview this often (ms). The stream is a single
+// encoding (no server transcode), so "low-res" = a periodic still instead of a
+// continuous decode — ~90% less CPU/bandwidth for a secondary view.
+const SAVER_INTERVAL = 6000;
 // Target receiver buffer (ms). A small buffer (not zero) absorbs jitter/packet
 // loss so poor connections stop freezing, while staying well under a second.
 const JITTER_MS = Number(import.meta.env.VITE_STREAM_JITTER_MS) || 500;
@@ -49,10 +53,12 @@ async function hlsPlay(url, videoEl, token) {
 
 function LiveVideoFeed({ showAnnotations, flash, duration, flight, recording, placeholder, fill }) {
   const videoRef = lvUseRef(null);
+  const canvasRef = lvUseRef(null);
   const [state, setState] = lvUseState("connecting"); // connecting | live | waiting
+  const [saver, setSaver] = lvUseState(false);        // data-saver (snapshot) mode
 
   lvUseEffect(() => {
-    let pc, hls, cancelled = false, retry, watchdog, stallTimer, whepFails = 0, preferHls = false;
+    let pc, hls, cancelled = false, retry, watchdog, stallTimer, saverTimer, whepFails = 0, preferHls = false;
     const video = videoRef.current;
     const id = flight?.dbId || flight?.id;
     if (!id || !video) return;
@@ -109,9 +115,30 @@ function LiveVideoFeed({ showAnnotations, flash, duration, flight, recording, pl
       }
     }
 
-    attempt();
-    return () => { cancelled = true; clearTimeout(retry); teardown(); };
-  }, [flight?.dbId, flight?.id]);
+    // Data-saver: briefly connect, grab one frame to the canvas, disconnect, wait.
+    // Sustained cost is near-zero (connected ~1s per SAVER_INTERVAL).
+    async function snapshotLoop() {
+      if (cancelled) return;
+      const token = await accessToken();
+      let localPc;
+      try {
+        localPc = await whepPlay(`${STREAM_BASE}/${id}/whep`, video, token);
+        await new Promise((res) => { const t = setTimeout(res, 4500); video.onplaying = () => { clearTimeout(t); setTimeout(res, 350); }; });
+        if (!cancelled && video.videoWidth && canvasRef.current) {
+          const c = canvasRef.current; c.width = video.videoWidth; c.height = video.videoHeight;
+          c.getContext("2d").drawImage(video, 0, 0);
+          setState("live");
+        }
+      } catch {}
+      try { localPc && localPc.close(); } catch {}
+      if (video) { video.onplaying = null; video.srcObject = null; }
+      if (!cancelled) saverTimer = setTimeout(snapshotLoop, SAVER_INTERVAL);
+    }
+
+    if (saver) { setState("connecting"); snapshotLoop(); }
+    else attempt();
+    return () => { cancelled = true; clearTimeout(retry); clearTimeout(saverTimer); teardown(); };
+  }, [flight?.dbId, flight?.id, saver]);
 
   // Pause decoding while this window/tab is hidden or minimized, so a background
   // player doesn't compete for CPU/GPU with a visible one (and stops wasting
@@ -136,9 +163,27 @@ function LiveVideoFeed({ showAnnotations, flash, duration, flight, recording, pl
       {/* Custom placeholder (e.g. multi-screen tile) shows until the feed is live. */}
       {state !== "live" && placeholder}
 
-      {/* contain — show the whole controller screen, letterboxed, never cropped. */}
+      {/* contain — show the whole controller screen, letterboxed, never cropped.
+          Hidden in data-saver mode (used only to grab periodic snapshots). */}
       <video ref={videoRef} autoPlay muted playsInline
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", display: state === "live" ? "block" : "none", background: "#000" }}/>
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", display: (!saver && state === "live") ? "block" : "none", background: "#000" }}/>
+      {/* Snapshot canvas — shown in data-saver mode. */}
+      <canvas ref={canvasRef}
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", display: (saver && state === "live") ? "block" : "none", background: "#000" }}/>
+
+      {/* Data-saver toggle (bottom-right). */}
+      <button onClick={() => setSaver(s => !s)}
+        title={saver ? "Switch to smooth live video" : "Data saver — low-bandwidth snapshot preview (great for a secondary view)"}
+        style={{ position: "absolute", bottom: fill ? 6 : 10, right: fill ? 6 : 10, zIndex: 4, border: "none", cursor: "pointer",
+          background: saver ? "rgba(37,99,235,0.92)" : "rgba(0,0,0,0.55)", color: "#fff", borderRadius: 999,
+          padding: fill ? "2px 7px" : "4px 10px", fontSize: fill ? 9 : 11, fontWeight: 600, display: "flex", alignItems: "center", gap: 5, backdropFilter: "blur(4px)" }}>
+        {saver ? "⚡ Go live" : "🐢 Data saver"}
+      </button>
+      {saver && state === "live" && (
+        <div style={{ position: "absolute", top: fill ? 8 : 12, right: fill ? 8 : 12, zIndex: 4, background: "rgba(37,99,235,0.9)", color: "#fff", borderRadius: 4, padding: fill ? "1px 5px" : "2px 7px", fontSize: fill ? 8.5 : 10, fontWeight: 700, letterSpacing: "0.03em", pointerEvents: "none" }}>
+          DATA SAVER · snapshot
+        </div>
+      )}
 
       {/* Minimal overlay on the real feed: REC badge only while actually recording. */}
       {state === "live" && recording && (
