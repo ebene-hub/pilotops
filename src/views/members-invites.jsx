@@ -44,7 +44,9 @@ function MembersInvitesView() {
     if (dirty) { setInvites(next); ivSaveInvites(next); }
   }, [now]);
 
-  const pending = mvUseMemo(() => invites.filter(i => i.status !== "accepted"), [invites]);
+  // Pending = invites still awaiting a response. Revoked (and accepted) ones drop
+  // off the list so the tab count matches the "Pending invites" dashboard metric.
+  const pending = mvUseMemo(() => invites.filter(i => i.status !== "accepted" && i.status !== "revoked"), [invites]);
   const filteredMembers = mvUseMemo(() => {
     const q = query.trim().toLowerCase();
     return members.filter(m => {
