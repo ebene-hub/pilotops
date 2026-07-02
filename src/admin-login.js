@@ -25,7 +25,13 @@ $("demo-fill")?.remove();
 async function afterPassword(email) {
   // Reject non-admins early (admin.html would bounce them anyway).
   const { data: { user } } = await supabase.auth.getUser();
-  const { data: profile } = await supabase.from("profiles").select("is_admin").eq("id", user.id).single();
+  const { data: profile } = await supabase.from("profiles").select("is_admin, org_id").eq("id", user.id).single();
+  // Founding admin who just confirmed their email: create their org now (the name
+  // was stashed in user_metadata at sign-up). This makes them an admin.
+  if (!profile?.org_id && user?.user_metadata?.pending_org_name) {
+    const { error } = await supabase.rpc("create_org_and_claim", { p_name: user.user_metadata.pending_org_name });
+    if (!error) { window.location.href = "/admin.html"; return; }
+  }
   if (!profile?.is_admin) {
     await supabase.auth.signOut();
     fail("This isn't an admin account.");

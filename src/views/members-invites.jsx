@@ -62,7 +62,23 @@ function MembersInvitesView() {
     });
   }, [pending, query, roleFilter]);
 
-  function sendInvites({ emails, roles, message, expiryDays }) {
+  // Email the invite link via the org's configured mail server (stream gateway).
+  async function emailInvite(inv) {
+    try {
+      const origin = window.location.origin;
+      const gatewayBase = (() => { try { return new URL(import.meta.env.VITE_STREAM_URL || origin, origin).origin; } catch { return origin; } })();
+      const sb = window.__supabase;
+      const token = (await sb.auth.getSession()).data?.session?.access_token || "";
+      const r = await fetch(`${gatewayBase}/send-invite`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, email: inv.email, link: ivLinkFor(inv.token), roles: inv.roles, message: inv.message, inviterName: window.__poAdminUser?.name || "Your admin" }),
+      });
+      const j = await r.json().catch(() => ({}));
+      return r.ok && j.ok;
+    } catch { return false; }
+  }
+
+  async function sendInvites({ emails, roles, message, expiryDays }) {
     const ms = expiryDays * 86400000;
     const newOnes = emails.map(email => ({
       token: ivGenToken(),
@@ -79,12 +95,18 @@ function MembersInvitesView() {
     const next = [...newOnes, ...invites];
     setInvites(next);
     ivSaveInvites(next);
-    toast({
-      kind: "success",
-      title: emails.length === 1 ? "Invitation sent" : `${emails.length} invitations sent`,
-      msg: emails.length === 1 ? emails[0] + " will receive a registration link." : "Recipients will receive a registration link via email.",
-    });
     setShowInvite(false);
+    // Actually email the link to each invitee (best-effort per recipient).
+    const results = await Promise.all(newOnes.map(emailInvite));
+    const sent = results.filter(Boolean).length;
+    if (sent === emails.length) {
+      toast({ kind: "success", title: sent === 1 ? "Invitation emailed" : `${sent} invitations emailed`,
+        msg: sent === 1 ? `Registration link sent to ${emails[0]}.` : "Registration links sent to all recipients." });
+    } else if (sent > 0) {
+      toast({ kind: "warn", title: "Some invites not emailed", msg: `${sent}/${emails.length} sent. Use Copy link for the rest — check Admin → Email delivery is configured.` });
+    } else {
+      toast({ kind: "warn", title: "Invites saved, not emailed", msg: "Email delivery isn't configured for your org yet (Admin → System → Email delivery). Use Copy link to share the invitation." });
+    }
   }
   function revokeInvite(inv) {
     if (!confirm(`Revoke invite for ${inv.email}? The link will stop working immediately.`)) return;
@@ -93,14 +115,16 @@ function MembersInvitesView() {
     toast({ kind: "info", title: "Invite revoked", msg: inv.email });
     setMenuFor(null);
   }
-  function resendInvite(inv) {
+  async function resendInvite(inv) {
     // Replaces the token (old link won't work) and resets expiry
-    const next = invites.map(i => i.token === inv.token
-      ? { ...i, token: ivGenToken(), sentAt: Date.now(), expiresAt: Date.now() + 7 * 86400000, openedAt: null, status: "pending" }
-      : i);
+    const fresh = { ...inv, token: ivGenToken(), sentAt: Date.now(), expiresAt: Date.now() + 7 * 86400000, openedAt: null, status: "pending" };
+    const next = invites.map(i => i.token === inv.token ? fresh : i);
     setInvites(next); ivSaveInvites(next);
-    toast({ kind: "success", title: "Invite resent", msg: `New link generated for ${inv.email}. Old link revoked.` });
     setMenuFor(null);
+    const ok = await emailInvite(fresh);
+    toast(ok
+      ? { kind: "success", title: "Invite resent", msg: `A fresh registration link was emailed to ${inv.email}. The old link no longer works.` }
+      : { kind: "warn", title: "Invite regenerated", msg: `New link created for ${inv.email}, but email isn't configured — use Copy link to share it.` });
   }
   function copyLink(inv) {
     const link = ivLinkFor(inv.token);

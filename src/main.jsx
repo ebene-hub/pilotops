@@ -84,6 +84,32 @@ function noAccess(roles) {
   });
 }
 
+// Shown to a member whose KYC isn't verified yet — no app features until an admin
+// verifies them (Admin console → Members → Verify KYC).
+function pendingKyc(status) {
+  const rejected = status === "rejected";
+  const root = document.getElementById("root");
+  if (root) root.innerHTML =
+    `<div style="height:100vh;display:grid;place-items:center;font-family:var(--font-sans);padding:24px">
+       <div style="max-width:440px;text-align:center">
+         <div style="width:52px;height:52px;border-radius:50%;background:color-mix(in oklab,var(--${rejected ? "danger" : "warning"}) 14%,transparent);color:var(--${rejected ? "danger" : "warning"});display:grid;place-items:center;margin:0 auto 16px">
+           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 8v4M12 16h.01"/></svg>
+         </div>
+         <h1 style="font-size:20px;margin:0 0 8px">${rejected ? "Account verification declined" : "Account pending verification"}</h1>
+         <p style="font-size:13.5px;color:var(--text-2);line-height:1.6;margin:0 0 20px">
+           ${rejected
+             ? "Your account verification was declined by an administrator. Please contact your organization's admin to resolve this."
+             : "Your account has been created, but an administrator must verify your details (KYC) before you can use Pilot Ops. You'll be able to sign in and start working once you're verified — please check back shortly or contact your admin."}
+         </p>
+         <button id="po-signout" class="btn btn-primary" style="height:40px">Sign out</button>
+       </div>
+     </div>`;
+  document.getElementById("po-signout")?.addEventListener("click", async () => {
+    try { await supabase.auth.signOut(); } catch {}
+    window.location.replace("/login.html");
+  });
+}
+
 async function start() {
   splash("Signing you in…");
   const { data: { session } } = await supabase.auth.getSession();
@@ -99,11 +125,14 @@ async function start() {
   // Access control: only operational roles may use Pilot Ops.
   const [{ data: roleRows }, { data: prof }] = await Promise.all([
     supabase.from("member_roles").select("roles(name)").eq("profile_id", u.id),
-    supabase.from("profiles").select("is_admin").eq("id", u.id).single(),
+    supabase.from("profiles").select("is_admin, kyc_status").eq("id", u.id).single(),
   ]);
   const roles = (roleRows || []).map((r) => r.roles?.name).filter(Boolean);
   const hasAccess = prof?.is_admin || roles.some((r) => PILOT_OPS_ROLES.has(r));
   if (!hasAccess) { noAccess(roles); return; }
+  // KYC gate: a non-admin whose account hasn't been verified by an admin can't
+  // use any feature yet. Admins (incl. the founding admin, auto-verified) pass.
+  if (!prof?.is_admin && prof?.kyc_status !== "verified") { pendingKyc(prof?.kyc_status); return; }
   // Surface the user's real role(s) for the sidebar + role-based UI gating.
   window.__poUser.role = roles[0] || (prof?.is_admin ? "Admin" : "Member");
   window.__poUser.roles = roles;

@@ -280,6 +280,37 @@ function flightEmailHtml(f, isStart, byName, liveUrl) {
     `<p style="margin:0 0 14px">${lead}</p><table style="width:100%;border-collapse:collapse;font-size:13px">${table}</table>${button}`);
 }
 
+function inviteEmailHtml(orgName, inviter, roles, message, link) {
+  const roleStr = (roles || []).join(", ");
+  return brandWrap("You're invited", `
+    <p style="margin:0 0 12px"><strong>${esc(inviter)}</strong> has invited you to join <strong>${esc(orgName)}</strong> on Pilot Ops${roleStr ? ` as <strong>${esc(roleStr)}</strong>` : ""}.</p>
+    ${message ? `<p style="margin:0 0 14px;padding:10px 12px;background:#f7f8fa;border-radius:8px;font-style:italic;color:#334">${esc(message)}</p>` : ""}
+    <p style="margin:0 0 16px">Click below to set up your account. This link is personal to you — please don't share it. After registering, an administrator will verify your details before you can start using Pilot Ops.</p>
+    <div style="margin:18px 0"><a href="${esc(link)}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;font-size:14px">Accept invitation &amp; register</a></div>
+    <p style="margin:14px 0 0;font-size:11.5px;color:#8a92a3">If the button doesn't work, copy this link into your browser:<br>${esc(link)}</p>`);
+}
+
+// Email an invite link to a prospective member, via the inviting admin's org SMTP.
+app.post("/send-invite", async (req, res) => {
+  const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const email = (req.body?.email || "").toString().trim();
+  const link = (req.body?.link || "").toString().trim();
+  const roles = Array.isArray(req.body?.roles) ? req.body.roles.slice(0, 10) : [];
+  const message = (req.body?.message || "").toString().slice(0, 1000);
+  const inviterName = (req.body?.inviterName || "Your admin").toString().slice(0, 120);
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !/^https?:\/\//i.test(link)) return res.status(400).json({ ok: false, reason: "invalid email or link" });
+  const { data: u } = await admin.auth.getUser(token);
+  if (!u?.user) return res.status(401).json({ ok: false, reason: "unauthorized" });
+  const { data: profile } = await admin.from("profiles").select("org_id, is_admin").eq("id", u.user.id).maybeSingle();
+  if (!profile || !profile.is_admin) return res.status(403).json({ ok: false, reason: "admin only" });
+  const { data: org } = await admin.from("organizations").select("name").eq("id", profile.org_id).maybeSingle();
+  const orgName = org?.name || "your organization";
+  const out = await sendEmailEach(profile.org_id, [email], `You're invited to join ${orgName} on Pilot Ops`, inviteEmailHtml(orgName, inviterName, roles, message, link));
+  log("send-invite", { email, org: profile.org_id, sent: out.sent });
+  if (!out.sent) return res.status(502).json({ ok: false, reason: out.reason || "send failed" });
+  res.json({ ok: true, sent: out.sent });
+});
+
 // Mission lifecycle notice → stakeholders who opted into 'pre-flight' notices.
 app.post("/notify-flight", async (req, res) => {
   const flightId = (req.body?.flightId || "").trim();
