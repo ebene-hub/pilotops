@@ -1,0 +1,257 @@
+# Pilot Ops — Project Handoff
+
+_Last updated: 2026-07-03_
+
+This document is the single-page orientation for anyone taking over, operating, or
+reviewing **Pilot Ops** — the GGIS UAV operations platform. It covers what the system
+is, how it's deployed, everything built to date, how to operate it, and what's still
+open. Deep procedural docs are linked where they exist; this file is the map.
+
+---
+
+## 1. What Pilot Ops is
+
+A multi-tenant web platform for running drone (UAV) flight operations end to end:
+
+- **Organizations** sign up, each fully isolated (own pilots, fleet, flights, media, config).
+- **Admins** manage the team, fleet, KYC verification, incidents, and org settings.
+- **Pilots** run pre-flight checks, start/stop missions, and fly.
+- **Live video** from the drone controller's screen is cast into the matching flight's
+  livestream in near-real-time (sub-second), recorded, and attached to the flight.
+- **Stakeholders** get mission start/end notices, a public "watch live" link, and a
+  post-flight summary email (with PDF).
+
+Companion pieces:
+- **GGIS UAV Companion** — native Android app installed on the drone controller that
+  mirrors the controller screen and casts it into Pilot Ops.
+- **Watch page** — public, per-org keyed page for viewing a live flight without an account.
+
+---
+
+## 2. Architecture at a glance
+
+```
+                          ┌───────────────────────────── Supabase Cloud ─────────────────────────────┐
+  Browser (SPA)  ───────► │  Auth (GoTrue) · Postgres + RLS · REST (PostgREST) · Realtime · Storage    │
+  pilothub.ggis.africa    │  project ref: zfpuulhgcubndcywfjxy                                          │
+  pilotops.vercel.app     └───────────────▲──────────────────────────────────▲──────────────────────────┘
+                                          │ service-role (server only)        │ Send Email Hook (signed)
+                                          │                                   │
+  Controller (Android) ──RTMP/SRT──►  ┌───┴──────────── EC2 stream server ────┴───┐
+  GGIS UAV Companion                  │  pilotops-stream.duckdns.org               │
+                                      │  Caddy (TLS) → MediaMTX (video) +          │
+  Browser ◄──WHEP/HLS via Caddy───────│  stream-gateway (Node: auth, recordings,   │
+                                      │  invite/auth/summary emails)               │
+                                      └────────────────────────────────────────────┘
+```
+
+**Frontend:** Vite multi-page app (React + `window.*` global-module pattern). Pages:
+`index` (dashboard), `login`, `admin-login`, `admin-signup`, `watch`. Built to a static
+`dist/`.
+
+**Backend data:** Supabase Cloud. Multi-tenancy is enforced by `org_id` columns +
+restrictive Row-Level-Security (`org_isolate`) policies. New API-key system in use:
+`sb_publishable_…` for the frontend (respects RLS), `sb_secret_…` server-side (bypasses
+RLS). Legacy anon/service_role JWTs are disabled.
+
+**Streaming/email server:** a single EC2 host running Docker Compose — Caddy (auto-TLS),
+MediaMTX (ingest RTMP/SRT → redistribute WebRTC/WHEP + HLS, record fmp4), and
+`stream-gateway` (Node/Express ESM). The gateway holds the service-role key and is the
+only component that sends email and writes recordings.
+
+---
+
+## 3. Deployments — where everything runs
+
+| Piece | Location | How it updates |
+|---|---|---|
+| **Staging frontend** | `pilotops.vercel.app` | **Auto-deploys** on every `git push` to `main`. Use this to test. |
+| **Production frontend** | `pilothub.ggis.africa` | **Static build**, hosted by the web team on cPanel. **Frozen** until you hand them a fresh `dist/`. Does NOT auto-update. |
+| **Backend** | Supabase Cloud, ref `zfpuulhgcubndcywfjxy` | Migrations applied by hand (SQL editor / CLI). Shared by both frontends. |
+| **Stream + email server** | EC2 `pilotops-stream.duckdns.org` | `git pull` + `docker compose up -d --build` over SSH. |
+| **Android app** | GGIS UAV Companion (sideloaded APK) | Built locally, signed, sideloaded onto controllers. |
+
+> **Key operational fact:** both frontends share the **same** Supabase + EC2 backend.
+> A backend or gateway change is live for both instantly. A frontend change is live on
+> vercel immediately but only reaches pilothub after a `dist` handoff. When something
+> "works on vercel but not on pilothub," it's almost always this gap.
+
+---
+
+## 4. What's been built (chronological feature history)
+
+The project has **95 commits**. Grouped by theme:
+
+**Foundation**
+- Full-stack Vite/React SPA + self-hosted Supabase schema, functions, RLS, storage.
+- Flight Hub (active/inactive states, nav badges), multi-screen view, expand/remove tiles.
+- Secure admin sign-up (first-run bootstrap) that closes the `is_admin` privilege hole.
+- Start-mission flow: pilot-in-command = signed-in user, selectable co-pilot.
+- Post-flight summary: recipient management, send, PDF attachment.
+
+**Multi-tenancy & org config**
+- Isolated organizations (`org_id` + RLS everywhere).
+- Per-org roles/sectors config; working notification bell + settings menu.
+- Per-org branding (org name + "powered by GGIS").
+
+**KYC & onboarding**
+- Role-aware KYC captured at registration; admin verification gate.
+- KYC restricted to crew; member-detail view in the Team roster.
+- **Confirmation email** after new-org registration (via Send Email Hook — see §6).
+- **Invite links emailed** to the invited member's address.
+- **KYC gate**: members cannot use any feature until an admin verifies them.
+
+**Live video (GGIS UAV Companion)**
+- MediaMTX + stream-gateway; controller screen → RTMP/SRT → WHEP/HLS in the browser.
+- `LiveVideoFeed` web player replaces the old simulated feed; HLS fallback.
+- Controller pairing on Start mission (companion code entry).
+- Android app built, signed, APK produced; release signing config.
+- Controller location shown on the map.
+- Per-player and per-watch-tile **Data saver** (snapshot) toggle; auto-pause when hidden.
+
+**Email system**
+- Real mission start/end notices + post-flight summary (Resend, then per-org SMTP).
+- Per-org email config (SMTP or Resend) with a global fallback.
+- Mismatched-cert SMTP tolerance (shared hosting presents `*.web-hosting.com`).
+- Configurable per-org "Watch live" link in notices.
+- Summary fixes: pilot name, draft handling, attachments.
+
+**Ops, notifications, safety**
+- Resilient watch-page polling + real-time in-app notifications (unread dot, mark-all-read, clear).
+- Pilot lockout with admin notify + override; instant summary.
+- Incidents, emergency reviews, integrations, webhooks.
+- **Org deletion with a 48h grace period** + auto-purge.
+
+**Deployment tooling & docs**
+- Managed path: Supabase Cloud + static host.
+- `cloud-bootstrap.sql` one-shot Supabase Cloud setup.
+- `scripts/build-dist.sh` — safe one-command frontend handoff (aborts if a secret key
+  leaks into the bundle, verifies project/stream host, zips as `pilotops-dist-<date>.zip`).
+- Docs: `DEPLOY.md`, `DEPLOY-CLOUD.md`, `DEPLOY-STATIC.md`, `TRANSFER-GUIDE.md`.
+
+---
+
+## 5. Database migrations
+
+Applied in order under `supabase/migrations/`. Highlights:
+
+| # | What |
+|---|---|
+| 0001–0004 | Base schema, functions, RLS, storage |
+| 0005–0007 | Member IDs, permissions, admin signup |
+| 0008–0009 | **Multi-tenancy**, per-org config |
+| 0010 | **KYC** (`profiles.kyc_status`: pending/verified/rejected) |
+| 0011–0020 | Streaming, pairing, public watch, public chat, auto-logbook, permanent/active watch keys, ingest keys |
+| 0021–0025 | Integrations, webhooks, crew exclusivity, pilot lockout, notifications realtime |
+| 0026–0028 | Per-org email settings, SMTP cert flag, email live-url |
+| 0029 | Org deletion (48h grace) |
+| 0030 | **profiles SELECT grant** — restores table-level grant after legacy keys were disabled (fixed the "not an admin" login bug) |
+
+> When moving to a fresh Supabase project, `cloud-bootstrap.sql` bundles the schema;
+> confirm the later migrations (0026+) are included or apply them after.
+
+---
+
+## 6. Onboarding & email — how the current flow works
+
+**Registration → confirmation email**
+1. `admin-signup.js` calls `supabase.auth.signUp` with `pending_org_name` stashed in
+   user metadata and `emailRedirectTo = <origin>/admin-login.html`.
+2. Supabase fires the **Send Email Hook** (Standard Webhooks spec) → POSTs the signed
+   payload to the gateway (`/auth-email-hook` or `/email-hook`).
+3. The gateway verifies the HMAC signature, builds the verify link from the **Supabase
+   project URL** (`${SUPABASE_URL}/auth/v1/verify?token=…&type=…&redirect_to=…`), and
+   sends a branded email through the cert-tolerant transport.
+4. If no session comes back (confirm-email on), the signup page shows a **"Confirm your
+   email"** screen (`showConfirm()`).
+5. User clicks the link → verified → redirected to admin sign-in. On first sign-in the
+   org is created from `pending_org_name` (deferred org creation in `admin-login.js`).
+
+Why the hook (not Supabase's built-in SMTP): the shared host's cert mismatch
+(`*.web-hosting.com`) can't be tolerated by Supabase's built-in SMTP; the gateway's
+nodemailer transport can (`smtp_allow_invalid_cert`).
+
+**Invites** — `members-invites.jsx` POSTs to the gateway `/send-invite`, which emails the
+invite link through the inviting admin's org transport. Revoked invites correctly drop
+off the Pending list.
+
+**KYC gate** — `main.jsx` blocks non-admins whose `kyc_status !== 'verified'` with a
+"pending verification" screen. Founders are auto-verified via `create_org_and_claim`.
+
+**Deliverability caveat:** emails **send** but land in Gmail spam without SPF/DKIM/DMARC
+for `pilothub.ggis.africa`. Set these in cPanel → Email Deliverability. (Open item.)
+
+---
+
+## 7. Operating the system
+
+**Push a frontend change**
+```bash
+git push origin main          # → vercel.app rebuilds automatically
+bash scripts/build-dist.sh    # → pilotops-dist-<date>.zip for pilothub
+# hand the zip + DEPLOY-STATIC.md to the web team
+```
+
+**Deploy a gateway / stream-server change**
+```bash
+ssh -i ssh-keypair.pem ubuntu@pilotops-stream.duckdns.org
+cd ~/pilotops && git pull --ff-only
+cd deploy/stream-server && sudo docker compose up -d --build stream-gateway
+sudo docker compose logs --tail=50 stream-gateway
+```
+> SSH port 22 is IP-restricted; your IP rotates, so you may need to re-whitelist it in
+> the EC2 security group each session. See the `stream-server-ops` memory note.
+
+**Apply a DB migration** — run the SQL in the Supabase dashboard SQL editor against ref
+`zfpuulhgcubndcywfjxy`, or via the Supabase CLI.
+
+**Build/sign the Android app** — see `android/README.md`. Release keystore location,
+alias, and build command are in the `android-release-signing` memory note.
+
+---
+
+## 8. Secrets & security (where they live — never in git)
+
+The repo is **public**. The following must never be committed and are gitignored
+(`*.pem`, `*.key`, `*.jks`, `*.keystore`, `*.apk`):
+
+- `ssh-keypair.pem` — EC2 SSH key.
+- Android release keystore `android/app/ggis-release.jks` (alias `ggis`).
+- `SUPABASE_SERVICE_ROLE_KEY` / `sb_secret_…` — server-side only, on the EC2 `.env`.
+- `SEND_EMAIL_HOOK_SECRET` (`v1,whsec_…`) — on the EC2 `.env`; matches the secret
+  generated in Supabase's Send Email Hook config.
+- Per-org SMTP/Resend secrets — stored in `org_email_settings` (write-only RPCs).
+
+**Rules:** service_role / `sb_secret_` keys must **never** be a `VITE_` frontend variable
+(only publishable/anon may be baked into the bundle — `build-dist.sh` enforces this).
+Git commits end with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
+
+---
+
+## 9. Open items / next steps
+
+| Item | Status |
+|---|---|
+| Hand fresh `dist` to web team | **`pilotops-dist-20260702.zip` ready.** Carries confirmation screen, invite emails, revoked-invite fix. |
+| SPF/DKIM/DMARC for `pilothub.ggis.africa` | Pending — cPanel → Email Deliverability. Needed to get emails out of Gmail spam. |
+| Confirm-link end-to-end test | Gateway fix live; verify with a real registration on vercel. |
+| Move production to a **company Supabase account** | Decided yes; guide written (`TRANSFER-GUIDE.md`). Not yet executed. |
+| Supabase Branching | Deferred until on the Pro plan. |
+| Recording storage backend | Undecided — see `video-storage-pending` memory note (<45MB → gallery, >45MB purged after 7 days). |
+
+---
+
+## 10. File reference (where to look)
+
+- **Frontend entry / gate:** `src/main.jsx` (KYC gate), `src/admin-signup.js`,
+  `src/admin-login.js` (deferred org creation).
+- **Views:** `src/views/*.jsx` — e.g. `members-invites.jsx`, `live-video.jsx`,
+  `admin-email-settings.jsx`, `admin-danger.jsx` (org deletion).
+- **Gateway:** `services/stream-gateway/index.mjs` — auth, recordings, and all
+  outbound email (`/send-invite`, `/auth-email-hook`, `/send-summary`, `/send-test-email`).
+- **Infra:** `docker-compose.yml`, `deploy/stream-server/`, `docker/Caddyfile`,
+  `docker/mediamtx.yml`.
+- **DB:** `supabase/migrations/`, `cloud-bootstrap.sql`.
+- **Android:** `android/` (`README.md` for build/sideload).
+- **Docs:** `DEPLOY.md`, `DEPLOY-CLOUD.md`, `DEPLOY-STATIC.md`, `TRANSFER-GUIDE.md`.
+- **Tooling:** `scripts/build-dist.sh`.
