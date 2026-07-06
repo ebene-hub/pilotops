@@ -193,29 +193,40 @@ async function handleRegister() {
 // registration, and sets the stashed pilot code. Returns { name, code } to
 // reveal, or null if this account has nothing pending.
 async function finalizePendingInvite(user) {
+  // Accept the invite server-side, keyed by the signed-in user's email — robust
+  // even if the stashed token was lost. Idempotent. NOTE: supabase.rpc resolves
+  // with { error } on failure (it does NOT throw), so we must check .error.
+  const { data: fin, error: finErr } = await supabase.rpc("finalize_my_invite");
+  if (finErr) console.warn("finalize_my_invite failed:", finErr.message);
+
   const md = user?.user_metadata || {};
-  const token = md.pending_invite_token;
-  if (!token) return null;
+  const hadOnboarding = !!(md.pending_invite_token || md.pending_kyc || md.pending_pilot_code);
+  // Nothing stashed and no invite accepted just now → this isn't an invited member.
+  if (!hadOnboarding && !(fin && fin.accepted)) return null;
 
-  try { await supabase.rpc("accept_invite", { p_token: token }); }
-  catch (e) { /* roles assignment best-effort */ }
+  // Save the KYC entered at registration. Status stays 'pending' until an admin
+  // verifies — kyc_status/kyc_submitted_at are admin/server-set.
+  if (md.pending_kyc) {
+    const k = md.pending_kyc;
+    const { error: kycErr } = await supabase.from("profiles").update({
+      phone: k.phone || null, job_title: k.job_title || null,
+      dob: k.dob || null, gov_id: k.gov_id || null,
+      license: k.license || null, license_class: k.license_class || null,
+      license_expiry: k.license_expiry || null,
+    }).eq("id", user.id);
+    if (kycErr) console.warn("KYC save failed:", kycErr.message);
+  }
 
-  // KYC status stays 'pending' until an admin verifies. Only member-writable
-  // columns — kyc_status/kyc_submitted_at are admin/server-set.
-  const k = md.pending_kyc || {};
-  const { error: kycErr } = await supabase.from("profiles").update({
-    phone: k.phone || null, job_title: k.job_title || null,
-    dob: k.dob || null, gov_id: k.gov_id || null,
-    license: k.license || null, license_class: k.license_class || null,
-    license_expiry: k.license_expiry || null,
-  }).eq("id", user.id);
-  if (kycErr) console.warn("KYC save failed:", kycErr.message);
-
+  // Set the pilot launch code (crew only).
   const code = md.pending_pilot_code || null;
-  if (code) { try { await supabase.rpc("set_pilot_code", { p_profile: user.id, p_code: code }); } catch (e) { /* best-effort */ } }
+  if (code) {
+    const { error: pcErr } = await supabase.rpc("set_pilot_code", { p_profile: user.id, p_code: code });
+    if (pcErr) console.warn("set_pilot_code failed:", pcErr.message);
+  }
 
-  // Clear the stashed onboarding data so this only runs once.
-  await supabase.auth.updateUser({ data: { pending_invite_token: null, pending_kyc: null, pending_pilot_code: null } });
+  // Clear the one-shot invite/KYC stash. Keep pending_pilot_code so the member can
+  // still see their code on the pending-verification screen until an admin verifies.
+  await supabase.auth.updateUser({ data: { pending_invite_token: null, pending_kyc: null } });
 
   return { name: md.full_name || user.email, code };
 }
