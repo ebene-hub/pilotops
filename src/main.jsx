@@ -91,8 +91,9 @@ function noAccess(roles) {
 // Idempotent and keyed by email server-side, so it's safe to call every load and
 // works even if the login-page finalizer already ran (or never did).
 async function finalizeInviteOnEntry(u) {
-  const { error } = await supabase.rpc("finalize_my_invite");
-  if (error) { console.warn("finalize_my_invite:", error.message); return; }
+  const { data: fin, error } = await supabase.rpc("finalize_my_invite");
+  if (error) { console.warn("[finalize_my_invite] error:", error.message); return; }
+  console.info("[finalize_my_invite] result:", fin);
   const md = u.user_metadata || {};
   if (md.pending_kyc) {
     const k = md.pending_kyc;

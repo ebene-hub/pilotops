@@ -23,12 +23,15 @@ declare
   em     text;
 begin
   if uid is null then
-    return jsonb_build_object('accepted', false);
+    return jsonb_build_object('accepted', false, 'reason', 'no-uid');
   end if;
 
-  select email into em from auth.users where id = uid;
+  -- Read the email from public.profiles (created for every user at signup) and
+  -- the JWT — NOT auth.users, which the definer role may not be able to read.
+  select email into em from profiles where id = uid;
+  if em is null then em := auth.jwt() ->> 'email'; end if;
   if em is null then
-    return jsonb_build_object('accepted', false);
+    return jsonb_build_object('accepted', false, 'reason', 'no-email');
   end if;
 
   select * into v from invites
@@ -39,18 +42,25 @@ begin
     limit 1;
 
   if v.id is null then
-    return jsonb_build_object('accepted', false);
+    return jsonb_build_object('accepted', false, 'reason', 'no-invite', 'email', em);
   end if;
 
+  -- Accept + place into org first. These must not be rolled back by a later
+  -- role-assignment hiccup, so the role insert runs in its own sub-block.
   update invites set status = 'accepted', accepted_at = now() where id = v.id;
   update profiles set org_id = v.org_id where id = uid and org_id is null;
-  insert into member_roles (profile_id, role_id, org_id)
-    select uid, r.id, v.org_id
-      from roles r
-     where r.name in (select jsonb_array_elements_text(v.roles))
-  on conflict do nothing;
 
-  return jsonb_build_object('accepted', true, 'roles', v.roles);
+  begin
+    insert into member_roles (profile_id, role_id, org_id)
+      select uid, r.id, v.org_id
+        from roles r
+       where r.name in (select jsonb_array_elements_text(v.roles))
+    on conflict do nothing;
+  exception when others then
+    raise warning 'finalize_my_invite: role insert failed: %', sqlerrm;
+  end;
+
+  return jsonb_build_object('accepted', true, 'org', v.org_id, 'roles', v.roles);
 end; $$;
 
 grant execute on function finalize_my_invite() to authenticated;
