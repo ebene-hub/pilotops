@@ -118,6 +118,10 @@ form.addEventListener("submit", async (e) => {
   submitBtn.disabled = true; submitLabel.innerHTML = '<span class="loading-spin"></span> Signing in…';
   const { error } = await supabase.auth.signInWithPassword({ email, password: pwd });
   if (error) { fail(error.message || "Incorrect email or password."); submitBtn.disabled = false; submitLabel.textContent = "Sign in"; return; }
+  // First sign-in after confirming an invite → finalize and reveal the code.
+  const { data: { user } } = await supabase.auth.getUser();
+  const fin = await finalizePendingInvite(user);
+  if (fin) { revealCode(fin.name, fin.code); return; }
   window.location.href = "/";
 });
 
@@ -149,43 +153,87 @@ async function handleRegister() {
   submitBtn.disabled = true; submitLabel.innerHTML = '<span class="loading-spin"></span> Creating account…';
 
   const initials = initialsOf(name);
+  // Operating crew get a pilot launch code. Email confirmation is required, so
+  // signUp returns no session — there's nothing to write to yet. Generate the
+  // code now and stash it (with KYC + the invite token) in user_metadata; a
+  // finalizer applies everything on the member's first sign-in AFTER they
+  // confirm their email (see finalizePendingInvite).
+  const pilotCode = isCrew ? genCode() : null;
   const { error: suErr } = await supabase.auth.signUp({
     email: activeInvite.email, password: pwd,
-    options: { data: { full_name: name, initials } },
+    options: {
+      data: {
+        full_name: name, initials,
+        pending_invite_token: inviteToken,
+        pending_kyc: kyc,
+        pending_pilot_code: pilotCode,
+      },
+      // After confirming, land on this sign-in page; the finalizer runs on sign-in.
+      emailRedirectTo: window.location.origin + "/login.html",
+    },
   });
   if (suErr) { fail(suErr.message); submitBtn.disabled = false; submitLabel.textContent = "Complete registration"; return; }
 
-  // Ensure we have a session (autoconfirm on the server makes this immediate).
+  // Confirmation required → no session yet. Tell them to check their email.
   let { data: { session } } = await supabase.auth.getSession();
   if (!session) {
-    const { error: siErr } = await supabase.auth.signInWithPassword({ email: activeInvite.email, password: pwd });
-    if (siErr) { fail("Account created — please sign in."); window.location.href = "/login.html"; return; }
+    const { data: si } = await supabase.auth.signInWithPassword({ email: activeInvite.email, password: pwd });
+    session = si?.session || null;
   }
+  if (!session) { showInviteConfirm(activeInvite.email); return; }
 
-  try { await supabase.rpc("accept_invite", { p_token: inviteToken }); }
+  // Project autoconfirms → finalize now and reveal the code immediately.
+  const { data: { user } } = await supabase.auth.getUser();
+  const fin = await finalizePendingInvite(user);
+  revealCode(fin?.name || name, fin?.code ?? pilotCode);
+}
+
+// Runs on the member's first authenticated sign-in after they confirm their
+// email: accepts the invite (role assignment), saves the KYC they entered at
+// registration, and sets the stashed pilot code. Returns { name, code } to
+// reveal, or null if this account has nothing pending.
+async function finalizePendingInvite(user) {
+  const md = user?.user_metadata || {};
+  const token = md.pending_invite_token;
+  if (!token) return null;
+
+  try { await supabase.rpc("accept_invite", { p_token: token }); }
   catch (e) { /* roles assignment best-effort */ }
 
-  const { data: { user } } = await supabase.auth.getUser();
+  // KYC status stays 'pending' until an admin verifies. Only member-writable
+  // columns — kyc_status/kyc_submitted_at are admin/server-set.
+  const k = md.pending_kyc || {};
+  const { error: kycErr } = await supabase.from("profiles").update({
+    phone: k.phone || null, job_title: k.job_title || null,
+    dob: k.dob || null, gov_id: k.gov_id || null,
+    license: k.license || null, license_class: k.license_class || null,
+    license_expiry: k.license_expiry || null,
+  }).eq("id", user.id);
+  if (kycErr) console.warn("KYC save failed:", kycErr.message);
 
-  // Persist KYC data (status stays 'pending' until an admin verifies). Only the
-  // member-writable columns — kyc_status/kyc_submitted_at are admin/server-set,
-  // and including them here would make Postgres reject the whole update.
-  if (user) {
-    const { error: kycErr } = await supabase.from("profiles").update({
-      phone: kyc.phone, job_title: kyc.job_title,
-      dob: kyc.dob || null, gov_id: kyc.gov_id || null,
-      license: kyc.license || null, license_class: kyc.license_class || null,
-      license_expiry: kyc.license_expiry || null,
-    }).eq("id", user.id);
-    if (kycErr) console.warn("KYC save failed:", kycErr.message);
-  }
+  const code = md.pending_pilot_code || null;
+  if (code) { try { await supabase.rpc("set_pilot_code", { p_profile: user.id, p_code: code }); } catch (e) { /* best-effort */ } }
 
-  let code = null;
-  if (isCrew && user) {
-    code = genCode();
-    await supabase.rpc("set_pilot_code", { p_profile: user.id, p_code: code });
-  }
-  revealCode(name, code);
+  // Clear the stashed onboarding data so this only runs once.
+  await supabase.auth.updateUser({ data: { pending_invite_token: null, pending_kyc: null, pending_pilot_code: null } });
+
+  return { name: md.full_name || user.email, code };
+}
+
+// "Check your email" screen shown after an invited member registers.
+function showInviteConfirm(email) {
+  show($("page-title"), false); show($("page-desc"), false); show($("invite-banner"), false);
+  show(form, false); clearFail();
+  const foot = document.querySelector(".login-foot"); if (foot) foot.innerHTML = 'Confirmed already? <a href="/login.html">Sign in →</a>';
+  const reveal = $("code-reveal"); reveal.style.display = "block";
+  const wrap = $("code-display-wrap"); if (wrap) wrap.style.display = "none";
+  $("code-reveal-name").textContent = "Confirm your email";
+  const note = document.createElement("p");
+  note.style.cssText = "margin-top:12px;font-size:13px;color:var(--text-2);line-height:1.6;";
+  const strong = document.createElement("strong"); strong.textContent = email;
+  note.append("We've sent a confirmation link to ", strong,
+    ". Click it to verify your email, then sign in with the password you just chose — your pilot launch code and details will be set up automatically.");
+  reveal.appendChild(note);
 }
 
 // ---- forgot / reset password ----------------------------------------------
@@ -285,6 +333,9 @@ function showResetForm() {
   if (inviteToken) { await initInvite(); return; }
   const { data: { session } } = await supabase.auth.getSession();
   if (session) {
+    const { data: { user } } = await supabase.auth.getUser();
+    const fin = await finalizePendingInvite(user);
+    if (fin) { revealCode(fin.name, fin.code); return; }
     const foot = document.querySelector(".login-foot");
     if (foot) foot.innerHTML = 'Signed in · <a href="/">Continue to Pilot Ops →</a>';
   }
