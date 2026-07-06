@@ -159,7 +159,7 @@ async function handleRegister() {
   // finalizer applies everything on the member's first sign-in AFTER they
   // confirm their email (see finalizePendingInvite).
   const pilotCode = isCrew ? genCode() : null;
-  const { error: suErr } = await supabase.auth.signUp({
+  const { data: suData, error: suErr } = await supabase.auth.signUp({
     email: activeInvite.email, password: pwd,
     options: {
       data: {
@@ -173,6 +173,15 @@ async function handleRegister() {
     },
   });
   if (suErr) { fail(suErr.message); submitBtn.disabled = false; submitLabel.textContent = "Complete registration"; return; }
+
+  // Enumeration-safe signal: when the email is already registered, Supabase
+  // returns a user with an empty identities array and does NOT set the new
+  // password or refresh metadata. Silently "succeeding" here would leave the
+  // member unable to sign in. Tell them to sign in / reset instead.
+  if (suData?.user && Array.isArray(suData.user.identities) && suData.user.identities.length === 0) {
+    submitBtn.disabled = false; submitLabel.textContent = "Complete registration";
+    return fail("An account with this email already exists. Sign in with your existing password — your invite is applied automatically once you're in. Forgot it? Use “Forgot password?” to reset.");
+  }
 
   // Confirmation required → no session yet. Tell them to check their email.
   let { data: { session } } = await supabase.auth.getSession();
