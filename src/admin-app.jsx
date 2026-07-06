@@ -54,6 +54,31 @@ const ADMIN_TITLES = {
   danger:        ["System",            "Delete organization"],
 };
 
+// Admin pages a non-admin role may reach if they hold the mapped permission.
+// Any page NOT listed here is admin-only (full admins see everything). This is
+// the single source of truth for both the nav filter and the login gate.
+const ADMIN_PAGE_PERM = {
+  aircraft: "fleet.manage",            // Maintenance Tech
+  "emergency-reviews": "emergency.review", // Safety Officer
+  incidents: "emergency.review",       // Safety Officer
+  audit: "audit.read",                 // Safety Officer
+};
+
+// Permissions that unlock at least one admin page → grant console access.
+const ADMIN_SURFACED_PERMS = Array.from(new Set(Object.values(ADMIN_PAGE_PERM)));
+
+// The nav a given user should see: admin-only items only for admins; scoped
+// items only when the user holds the permission. Empty groups are dropped.
+function visibleAdminNav(isAdmin) {
+  const can = (p) => (typeof window !== "undefined" && window.hasPerm ? window.hasPerm(p) : false);
+  return ADMIN_NAV
+    .map((g) => ({ ...g, items: g.items.filter((it) => {
+      const need = ADMIN_PAGE_PERM[it.id];
+      return need ? can(need) : !!isAdmin;
+    }) }))
+    .filter((g) => g.items.length);
+}
+
 const ADMIN_TWEAK_DEFAULTS = {
   "theme": "light",
   "accent": "#2563eb",
@@ -62,10 +87,21 @@ const ADMIN_TWEAK_DEFAULTS = {
 
 function AdminApp() {
   const [t, setTweak] = useTweaks(ADMIN_TWEAK_DEFAULTS);
-  // Initial route from hash: e.g. /admin.html#aircraft
-  const initial = (typeof location !== "undefined" && location.hash.replace("#", "")) || "pilot-dash";
-  const [view, setView] = aaAppUseState(ADMIN_TITLES[initial] ? initial : "pilot-dash");
+  // Role-scoped nav: full admins see everything; other roles (e.g. Maintenance
+  // Tech, Safety Officer) see only the pages their permissions unlock.
+  const isAdmin = typeof window !== "undefined" && window.__poAdminUser?.isAdmin;
+  const nav = visibleAdminNav(isAdmin);
+  const allowed = new Set(nav.flatMap((g) => g.items.map((it) => it.id)));
+  const firstAllowed = nav[0]?.items[0]?.id || "pilot-dash";
+  // Initial route from hash (e.g. /admin.html#aircraft), but only if allowed.
+  const hashView = (typeof location !== "undefined" && location.hash.replace("#", "")) || "";
+  const [view, setView] = aaAppUseState(allowed.has(hashView) ? hashView : firstAllowed);
   const [mobileNavOpen, setMobileNavOpen] = aaAppUseState(false);
+
+  // Guard: a scoped user can't reach an admin-only page by editing the hash.
+  aaAppUseEffect(() => {
+    if (!allowed.has(view)) setView(firstAllowed);
+  }, [view]);
 
   const [teamRoster, setTeamRoster] = aaAppUseState(TEAM_ROSTER);
   const [fieldConfig, setFieldConfig] = aaAppUseState(DEFAULT_FIELD_CONFIG);
@@ -92,7 +128,7 @@ function AdminApp() {
   return (
     <div className="app-shell" data-sidebar-pos="left" data-mobile-nav={mobileNavOpen ? "open" : "closed"}>
       {mobileNavOpen && <div className="mobile-nav-scrim" onClick={() => setMobileNavOpen(false)}/>}
-      <AdminSidebar nav={ADMIN_NAV} view={view} setView={setView} onMobileClose={() => setMobileNavOpen(false)}/>
+      <AdminSidebar nav={nav} view={view} setView={setView} onMobileClose={() => setMobileNavOpen(false)}/>
       <div className="main-col">
         <AdminTopbar crumbs={crumbs} onMobileMenu={() => setMobileNavOpen(true)}/>
         <OrgDeletionBanner onManage={() => setView("danger")}/>

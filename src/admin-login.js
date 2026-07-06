@@ -32,9 +32,20 @@ async function afterPassword(email) {
     const { error } = await supabase.rpc("create_org_and_claim", { p_name: user.user_metadata.pending_org_name });
     if (!error) { window.location.href = "/admin.html"; return; }
   }
-  if (!profile?.is_admin) {
+  // Admins always; other roles may enter the console if they hold a permission
+  // that unlocks an admin page (Maintenance Tech → aircraft, Safety Officer →
+  // emergency reviews / incidents / audit). The console filters the nav to match.
+  let canConsole = !!profile?.is_admin;
+  if (!canConsole) {
+    const { data: roleRows } = await supabase.from("member_roles").select("roles(permissions)").eq("profile_id", user.id);
+    const perms = new Set();
+    (roleRows || []).forEach((r) => (r.roles?.permissions || []).forEach((p) => perms.add(p)));
+    const ADMIN_SURFACED_PERMS = ["fleet.manage", "emergency.review", "audit.read"];
+    canConsole = ADMIN_SURFACED_PERMS.some((p) => perms.has(p) || perms.has("*"));
+  }
+  if (!canConsole) {
     await supabase.auth.signOut();
-    fail("This isn't an admin account.");
+    fail("This account doesn't have admin-console access.");
     submitBtn.disabled = false; submitLabel.textContent = "Continue";
     return;
   }

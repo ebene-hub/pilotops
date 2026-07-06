@@ -42,17 +42,39 @@ function splash(msg) {
      </div><style>@keyframes spin{to{transform:rotate(360deg)}}</style>`;
 }
 
+// Permissions that unlock at least one admin page (mirror of ADMIN_SURFACED_PERMS
+// in admin-app.jsx). A non-admin holding any of these may use the console, but
+// the nav is filtered to only the pages they're entitled to.
+const ADMIN_SURFACED_PERMS = ["fleet.manage", "emergency.review", "audit.read"];
+
 async function start() {
   splash("Verifying admin access…");
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) { window.location.replace("/admin-login.html"); return; }
 
   const profile = await currentProfile();
-  if (!profile || !profile.is_admin) { window.location.replace("/admin-login.html"); return; }
+  if (!profile) { window.location.replace("/admin-login.html"); return; }
+
+  // Effective console permissions: full admins get everything; other roles get
+  // the union of their roles' permissions, so the nav shows only their pages.
+  let permSet = new Set(["*"]);
+  let roleName = profile.admin_role || "Admin";
+  if (!profile.is_admin) {
+    const { data: roleRows } = await supabase.from("member_roles").select("roles(name, permissions)").eq("profile_id", profile.id);
+    permSet = new Set();
+    (roleRows || []).forEach((r) => (r.roles?.permissions || []).forEach((p) => permSet.add(p)));
+    roleName = (roleRows || []).map((r) => r.roles?.name).filter(Boolean)[0] || "Member";
+  }
+  window.__poPerms = permSet;
+  window.hasPerm = (p) => permSet.has("*") || permSet.has(p);
+
+  // Gate: admins always; other roles only if they hold an admin-surfaced permission.
+  const canConsole = profile.is_admin || ADMIN_SURFACED_PERMS.some((p) => window.hasPerm(p));
+  if (!canConsole) { window.location.replace("/admin-login.html"); return; }
 
   window.__poAdminUser = {
     id: profile.id, email: profile.email, name: profile.full_name,
-    role: profile.admin_role || "Admin", initials: profile.initials, isAdmin: true,
+    role: roleName, initials: profile.initials, isAdmin: !!profile.is_admin,
   };
 
   // Org identity for the console header.
@@ -64,9 +86,8 @@ async function start() {
   splash("Loading console data…");
   await bootstrap();
 
-  // Admins have full permissions in the console.
-  window.__poPerms = new Set(["*"]);
-  window.hasPerm = () => true;
+  // NOTE: window.__poPerms / window.hasPerm were set above from the user's real
+  // permissions (all "*" for admins, scoped for other roles) — do not override.
 
   const { AdminApp, ToastProvider } = window;
   createRoot(document.getElementById("root")).render(
