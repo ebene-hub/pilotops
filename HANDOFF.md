@@ -1,6 +1,6 @@
 # Pilot Ops — Project Handoff
 
-_Last updated: 2026-07-03_
+_Last updated: 2026-07-06_
 
 This document is the single-page orientation for anyone taking over, operating, or
 reviewing **Pilot Ops** — the GGIS UAV operations platform. It covers what the system
@@ -146,6 +146,7 @@ Applied in order under `supabase/migrations/`. Highlights:
 | 0026–0028 | Per-org email settings, SMTP cert flag, email live-url |
 | 0029 | Org deletion (48h grace) |
 | 0030 | **profiles SELECT grant** — restores table-level grant after legacy keys were disabled (fixed the "not an admin" login bug) |
+| 0031 | **finalize_my_invite()** — email-keyed, idempotent invite acceptance (assigns org + roles, marks accepted). Robust against a lost invite token; run on the member's first sign-in/app entry |
 
 > When moving to a fresh Supabase project, `cloud-bootstrap.sql` bundles the schema;
 > confirm the later migrations (0026+) are included or apply them after.
@@ -171,15 +172,43 @@ Why the hook (not Supabase's built-in SMTP): the shared host's cert mismatch
 (`*.web-hosting.com`) can't be tolerated by Supabase's built-in SMTP; the gateway's
 nodemailer transport can (`smtp_allow_invalid_cert`).
 
-**Invites** — `members-invites.jsx` POSTs to the gateway `/send-invite`, which emails the
-invite link through the inviting admin's org transport. Revoked invites correctly drop
-off the Pending list.
+**Invited-member registration → confirmation → launch code** (`login.js`)
+1. `members-invites.jsx` POSTs to the gateway `/send-invite`, which emails the invite
+   link through the inviting admin's org transport. Revoked invites drop off Pending.
+2. The member opens the link, fills name + KYC + password, and registers. Because
+   email confirmation is on, `signUp` returns no session — so the KYC, a generated
+   pilot code, and the invite token are **stashed in `user_metadata`** and a
+   **"Confirm your email"** screen is shown. (Same Send Email Hook as above.)
+3. If the email is **already registered**, `signUp` is a silent no-op (enumeration-safe:
+   empty `identities`); the flow detects this and tells them to **sign in instead**.
+4. Member confirms → returns to `/login.html` → signs in. On first sign-in, the
+   **finalizer** runs: `finalize_my_invite()` (accepts the invite by email → org + roles),
+   saves the stashed KYC, sets the pilot code, and **reveals the launch code**.
+5. The finalizer **also runs on first app entry** (`main.jsx`) as the guaranteed
+   chokepoint, and the launch code is shown again on the KYC-pending gate so a gated
+   member can still save it.
+
+Why email-keyed (`finalize_my_invite`, migration 0031): the old token-based
+acceptance broke when the stashed token was lost (e.g. a duplicate `signUp`), leaving
+the invite permanently "pending". Accepting by the signed-in user's email is robust and
+idempotent. Note: `supabase.rpc()` **resolves with `{error}` — it does not throw** — so
+RPC errors must be checked, not wrapped in try/catch.
 
 **KYC gate** — `main.jsx` blocks non-admins whose `kyc_status !== 'verified'` with a
-"pending verification" screen. Founders are auto-verified via `create_org_and_claim`.
+"pending verification" screen (which also shows their launch code). Founders are
+auto-verified via `create_org_and_claim`. An admin verifies members in the Team roster
+(`set_kyc_status`).
 
-**Deliverability caveat:** emails **send** but land in Gmail spam without SPF/DKIM/DMARC
-for `pilothub.ggis.africa`. Set these in cPanel → Email Deliverability. (Open item.)
+**Deliverability caveat (now blocking):** emails **send** but land in Gmail spam without
+SPF/DKIM/DMARC for `pilothub.ggis.africa`. Since invited members **must** click the
+confirmation link to finish, this blocks real onboarding until fixed in
+cPanel → Email Deliverability.
+
+**Auth redirect config (required):** Supabase → Authentication → URL Configuration must
+list **both** `https://pilotops.vercel.app/**` and `https://pilothub.ggis.africa/**` under
+Redirect URLs. Otherwise GoTrue ignores the requested `redirect_to` and sends the confirm
+link to the Site URL. Confirm links always return to the origin the member **registered**
+on — don't mix sites within one test.
 
 ---
 
@@ -232,9 +261,10 @@ Git commits end with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 
 | Item | Status |
 |---|---|
-| Hand fresh `dist` to web team | **`pilotops-dist-20260702.zip` ready.** Carries confirmation screen, invite emails, revoked-invite fix. |
-| SPF/DKIM/DMARC for `pilothub.ggis.africa` | Pending — cPanel → Email Deliverability. Needed to get emails out of Gmail spam. |
-| Confirm-link end-to-end test | Gateway fix live; verify with a real registration on vercel. |
+| Full onboarding flow (confirmation email, invited-member confirm + launch code, robust invite acceptance, KYC gate) | **Shipped & verified end-to-end on vercel.** Migration 0031 applied; Auth Redirect URLs configured for both domains. |
+| Hand fresh `dist` to web team for pilothub | **`pilotops-dist-20260706.zip` ready** (carries everything above + duplicate-email guard). Give with `DEPLOY-STATIC.md`. Backend is shared, so no separate DB step for pilothub. |
+| **SPF/DKIM/DMARC for `pilothub.ggis.africa`** | **Blocking for real onboarding** — invited members must click the confirm email, which currently lands in spam. cPanel → Email Deliverability. |
+| Admin invite list is not realtime | Minor — the admin must refresh to see an accepted invite move to Active. Could add a realtime subscription if desired. |
 | Move production to a **company Supabase account** | Decided yes; guide written (`TRANSFER-GUIDE.md`). Not yet executed. |
 | Supabase Branching | Deferred until on the Pro plan. |
 | Recording storage backend | Undecided — see `video-storage-pending` memory note (<45MB → gallery, >45MB purged after 7 days). |
@@ -243,8 +273,9 @@ Git commits end with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 
 ## 10. File reference (where to look)
 
-- **Frontend entry / gate:** `src/main.jsx` (KYC gate), `src/admin-signup.js`,
-  `src/admin-login.js` (deferred org creation).
+- **Frontend entry / gate:** `src/main.jsx` (KYC gate + invite finalizer on app entry),
+  `src/login.js` (invited-member registration, confirm screen, launch-code reveal,
+  duplicate-email guard), `src/admin-signup.js`, `src/admin-login.js` (deferred org creation).
 - **Views:** `src/views/*.jsx` — e.g. `members-invites.jsx`, `live-video.jsx`,
   `admin-email-settings.jsx`, `admin-danger.jsx` (org deletion).
 - **Gateway:** `services/stream-gateway/index.mjs` — auth, recordings, and all
