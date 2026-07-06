@@ -147,6 +147,7 @@ Applied in order under `supabase/migrations/`. Highlights:
 | 0029 | Org deletion (48h grace) |
 | 0030 | **profiles SELECT grant** — restores table-level grant after legacy keys were disabled (fixed the "not an admin" login bug) |
 | 0031 | **finalize_my_invite()** — email-keyed, idempotent invite acceptance (assigns org + roles, marks accepted). Robust against a lost invite token; run on the member's first sign-in/app entry |
+| 0032 | **aircraft write policy** — permissive RLS so `fleet.manage` holders (Maintenance Tech) can manage the aircraft registry, not just admins (see §7) |
 
 > When moving to a fresh Supabase project, `cloud-bootstrap.sql` bundles the schema;
 > confirm the later migrations (0026+) are included or apply them after.
@@ -212,7 +213,52 @@ on — don't mix sites within one test.
 
 ---
 
-## 7. Operating the system
+## 7. Roles & access model
+
+There are **two areas** on the same domain, each with its own auth storage key
+(`src/api/supabase.js`) so a person can be signed into both independently:
+
+- **Operational Pilot Ops app** (`/`, sign in at `/login.html`) — pilots **and all
+  other operational roles** work here.
+- **Admin console** (`/admin*.html`, sign in at `/admin-login.html`) — admins, **plus
+  specific non-admin roles scoped to just their pages** (see below).
+
+**Who can enter the operational app:** anyone holding an operational role
+(`PILOT_OPS_ROLES` in `main.jsx`: Pilot, Co-pilot, Mission Commander, Safety Officer,
+Observer, Maintenance Tech, Dispatcher, Director). The **KYC gate** still applies to
+non-admins.
+
+**Permissions** are the union of a member's roles' `permissions` arrays (`0006`),
+enforced **server-side by RLS** via `auth_has_perm(...)` — so unchecking a permission
+actually blocks the action, not just the button. Canonical vocabulary:
+`flight.create, incident.create, media.upload, report.create, battery.update,
+fleet.manage, emergency.review, audit.read`, and `*` (admin/Director).
+
+**Role-scoped admin access** — some tools live in the admin console but are needed by
+non-admin roles. Rather than duplicate them, those roles get into the console with a
+**nav filtered to only their pages** (`ADMIN_PAGE_PERM` in `admin-app.jsx` is the single
+source of truth; the login gate and `admin-main.jsx` mirror it via `ADMIN_SURFACED_PERMS`):
+
+| Role | Permission | Admin pages they see |
+|---|---|---|
+| Maintenance Tech | `fleet.manage` | Aircraft registry (+ batteries) |
+| Safety Officer | `emergency.review`, `audit.read` | Emergency reviews, Incident log, Audit log |
+| Admin / Director | `*` | Everything |
+
+Enforcement is layered: **login gate** (`admin-login.js` — must hold a surfaced
+permission), **nav filter + hash guard** (`admin-app.jsx` — can't reach admin-only pages
+by URL), **scoped permissions** (`admin-main.jsx` loads real perms, not `*`), and
+**RLS** (writes gated server-side; migration 0032 added the aircraft-write policy for
+`fleet.manage`). A role with no surfaced permission (e.g. a plain Pilot) is refused at
+the console login with *"This account doesn't have admin-console access."*
+
+To change what a role can do or see: edit its permissions in **Admin → Roles &
+permissions** (`set` via the roles table). To add a new scoped admin page, add an entry
+to `ADMIN_PAGE_PERM` and (if it needs a new write) an RLS policy gated on that permission.
+
+---
+
+## 8. Operating the system
 
 **Push a frontend change**
 ```bash
@@ -239,7 +285,7 @@ alias, and build command are in the `android-release-signing` memory note.
 
 ---
 
-## 8. Secrets & security (where they live — never in git)
+## 9. Secrets & security (where they live — never in git)
 
 The repo is **public**. The following must never be committed and are gitignored
 (`*.pem`, `*.key`, `*.jks`, `*.keystore`, `*.apk`):
@@ -257,11 +303,12 @@ Git commits end with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 
 ---
 
-## 9. Open items / next steps
+## 10. Open items / next steps
 
 | Item | Status |
 |---|---|
 | Full onboarding flow (confirmation email, invited-member confirm + launch code, robust invite acceptance, KYC gate) | **Shipped & verified end-to-end on vercel.** Migration 0031 applied; Auth Redirect URLs configured for both domains. |
+| Role-scoped admin access (Maintenance Tech → Aircraft registry; Safety Officer → Emergency reviews / Incidents / Audit) — see §7 | **Shipped.** Requires **migration 0032** applied to the live DB (aircraft-write policy). |
 | Hand fresh `dist` to web team for pilothub | **`pilotops-dist-20260706.zip` ready** (carries everything above + duplicate-email guard). Give with `DEPLOY-STATIC.md`. Backend is shared, so no separate DB step for pilothub. |
 | **SPF/DKIM/DMARC for `pilothub.ggis.africa`** | **Blocking for real onboarding** — invited members must click the confirm email, which currently lands in spam. cPanel → Email Deliverability. |
 | Admin invite list is not realtime | Minor — the admin must refresh to see an accepted invite move to Active. Could add a realtime subscription if desired. |
@@ -271,11 +318,14 @@ Git commits end with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 
 ---
 
-## 10. File reference (where to look)
+## 11. File reference (where to look)
 
 - **Frontend entry / gate:** `src/main.jsx` (KYC gate + invite finalizer on app entry),
   `src/login.js` (invited-member registration, confirm screen, launch-code reveal,
-  duplicate-email guard), `src/admin-signup.js`, `src/admin-login.js` (deferred org creation).
+  duplicate-email guard), `src/admin-signup.js`, `src/admin-login.js` (deferred org
+  creation + role-scoped console gate).
+- **Admin console:** `src/admin-main.jsx` (auth gate + scoped permission loading),
+  `src/admin-app.jsx` (`ADMIN_PAGE_PERM`, nav filter, hash guard) — see §7.
 - **Views:** `src/views/*.jsx` — e.g. `members-invites.jsx`, `live-video.jsx`,
   `admin-email-settings.jsx`, `admin-danger.jsx` (org deletion).
 - **Gateway:** `services/stream-gateway/index.mjs` — auth, recordings, and all
