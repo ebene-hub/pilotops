@@ -24,6 +24,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
   const mediaRecRef = lsUseRef(null);
   const recChunksRef = lsUseRef([]);
   const recStartRef = lsUseRef(0);
+  const endedRef = lsUseRef(false); // guard: only transition out of the live view once
   const [showAnnotations, setShowAnnotations] = lsUseState(true);
   const [flash, setFlash] = lsUseState(false);
   const [screenshots, setScreenshots] = lsUseState([]);
@@ -172,7 +173,20 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
       .then(({ data }) => { if (data && data.cur_lat != null) setPos({ lat: data.cur_lat, lng: data.cur_lng }); });
     channel = supabase.channel("flightpos:" + f.dbId)
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "flights", filter: "id=eq." + f.dbId },
-        (p) => { if (p.new?.cur_lat != null) setPos({ lat: p.new.cur_lat, lng: p.new.cur_lng }); })
+        (p) => {
+          if (p.new?.cur_lat != null) setPos({ lat: p.new.cur_lat, lng: p.new.cur_lng });
+          // The pilot in command ended (or flagged) the mission → end this live
+          // view in sync for everyone else watching it (e.g. the co-pilot). The
+          // guard stops the person who clicked End from double-handling.
+          if ((p.new?.status === "completed" || p.new?.status === "flagged") && !endedRef.current) {
+            endedRef.current = true;
+            toast({ kind: "info", title: "Mission ended", msg: "The pilot in command ended this flight." });
+            (async () => {
+              try { await refresh(); } catch {}
+              onEndFlight && onEndFlight({ ...f, status: p.new.status });
+            })();
+          }
+        })
       .subscribe();
     return () => { channel && supabase.removeChannel(channel); };
   }, [f?.dbId]);
@@ -413,6 +427,7 @@ function LiveStreamView({ flight, basemap, setBasemap, onEndFlight }) {
             <button className="btn btn-ghost" onClick={() => setEndOpen(false)}>Cancel</button>
             <button className="btn btn-primary" onClick={async () => {
               setEndOpen(false);
+              endedRef.current = true; // we're ending it ourselves — ignore our own realtime echo
               // Actually end the mission in the DB so it leaves the active board.
               if (f?.dbId) {
                 await supabase.from("flights").update({ status: "completed", ended_at: new Date().toISOString() }).eq("id", f.dbId);
