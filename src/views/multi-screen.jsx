@@ -1,7 +1,8 @@
 import React from "react";
 import { supabase } from "../api/supabase.js";
+import { refresh } from "../store.jsx";
 // Pilot Ops — Multi-screen ops grid (simultaneous pilot feeds)
-const { useState: msUseState, useRef: msUseRef } = React;
+const { useState: msUseState, useRef: msUseRef, useEffect: msUseEffect } = React;
 
 function MultiScreenView({ basemap, onFocus }) {
   const [layout, setLayout] = msUseState("2x2"); // "2x2", "1+3", "focus"
@@ -11,6 +12,27 @@ function MultiScreenView({ basemap, onFocus }) {
   const [sending, setSending] = msUseState(false);
   const wallRef = msUseRef(null);
   const toast = useToast();
+  const [, setTick] = msUseState(0);        // force a re-read of ACTIVE_FLIGHTS after refresh
+  const endedIdsRef = msUseRef(new Set());  // dedupe terminal-status events per flight
+
+  // Keep the wall in sync: when any live mission ends (or is flagged) elsewhere,
+  // refresh the store so its tile drops off the wall — no manual reload.
+  msUseEffect(() => {
+    const ch = supabase.channel("multiscreen-flights")
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "flights" }, (p) => {
+        const st = p.new?.status;
+        if (st !== "completed" && st !== "flagged") return;
+        const id = p.new?.id;
+        if (!id || endedIdsRef.current.has(id)) return;
+        const flt = (window.ACTIVE_FLIGHTS || []).find((f) => f.dbId === id);
+        if (!flt) return;                     // not on our wall — ignore
+        endedIdsRef.current.add(id);
+        toast({ kind: "info", title: "Mission ended", msg: `${flt.id || "A live mission"} has ended and left the wall.` });
+        (async () => { try { await refresh(); } catch {} setTick((t) => t + 1); })();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, []);
 
   const active = ACTIVE_FLIGHTS || [];
   const totalTiles = Math.max(slots, active.length, 1);
