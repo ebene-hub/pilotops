@@ -200,6 +200,19 @@ async function transportForOrg(orgId) {
   return null;
 }
 
+// Turn a nodemailer / fetch send error into a compact, actionable reason string
+// that surfaces the SMTP response code (e.g. "535 …") or the network error code
+// (e.g. "ETIMEDOUT") so the admin sees WHY a test failed, not just "failed".
+function fmtMailErr(e) {
+  if (!e) return "send failed";
+  const parts = [];
+  if (e.responseCode) parts.push(String(e.responseCode)); // SMTP reply code: 535, 550…
+  else if (e.code) parts.push(String(e.code));            // network/TLS code: ETIMEDOUT, EAUTH…
+  const detail = (e.response || e.message || "").toString().trim();
+  if (detail) parts.push(detail.slice(0, 180));
+  return parts.join(" ") || "send failed";
+}
+
 async function resendSend(tp, to, subject, html, attachments) {
   const body = { from: tp.from, to, subject, html };
   if (attachments?.length) body.attachments = attachments.map((a) => ({ filename: a.filename, path: a.url }));
@@ -225,6 +238,12 @@ async function sendEmailEach(orgId, recipients, subject, html, attachments) {
     smtp = nodemailer.createTransport({
       host: tp.host, port: tp.port, secure: tp.secure,
       auth: tp.user ? { user: tp.user, pass: tp.pass } : undefined,
+      // Fail fast instead of hanging ~2 min when the host/port is unreachable or
+      // a port/TLS-mode mismatch stalls the handshake — the admin gets the real
+      // error (timeout vs auth) quickly.
+      connectionTimeout: 12000, // no TCP connect within 12s → ETIMEDOUT/ECONNECTION
+      greetingTimeout: 12000,   // connected but no SMTP banner (wrong port/TLS) → fail
+      socketTimeout: 20000,
       // Shared hosting often presents a cert for a different name than the mail
       // host; allow it when the org opted in (connection is still encrypted).
       tls: tp.allowInvalidCert ? { rejectUnauthorized: false } : undefined,
@@ -236,7 +255,7 @@ async function sendEmailEach(orgId, recipients, subject, html, attachments) {
       if (tp.kind === "resend") await resendSend(tp, to, subject, html, attachments);
       else await smtp.sendMail({ from: tp.from, to, subject, html, attachments: smtpAtt });
       sent++;
-    } catch (e) { lastErr = e.message; log("email send failed", e.message); }
+    } catch (e) { lastErr = fmtMailErr(e); log("email send failed", lastErr); }
   }
   try { smtp?.close(); } catch {}
   return { ok: sent > 0, sent, reason: sent > 0 ? undefined : lastErr };
