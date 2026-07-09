@@ -7,6 +7,21 @@ const { useState: lbUseState, useMemo: lbUseMemo } = React;
 // start empty until a pilot logs flights — no dummy data.
 const ACHIEVEMENTS = [];
 
+// Raw flight-controller logs a pilot can attach to a manual entry — for flights
+// flown from another controller Pilot Ops never auto-logged. Stored in the
+// private `media` bucket; the entry row references it (migration 0034).
+const LOG_EXT = [".bin", ".log", ".tlog", ".ulg"]; // ArduPilot .bin/.log, MAVLink .tlog, PX4 .ulg
+const LOG_MAX_MB = 60;
+const fmtSize = (b) => (!b ? "" : b < 1e6 ? (b / 1e3).toFixed(0) + " KB" : (b / 1e6).toFixed(1) + " MB");
+
+async function downloadEntryLog(entry, toast) {
+  if (!entry?.logPath) return;
+  const { data, error } = await window.__supabase.storage.from("media").createSignedUrl(entry.logPath, 3600, { download: entry.logName || "flight.bin" });
+  if (error || !data?.signedUrl) { toast({ kind: "warn", title: "Download failed", msg: error?.message || "Could not fetch the log." }); return; }
+  const a = document.createElement("a"); a.href = data.signedUrl; a.download = entry.logName || "flight.bin";
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
 function LogbookView({ accent }) {
   const me = PILOTS.find(p => p.id === window.__poUser?.id) || PILOTS[0] || { name: window.__poUser?.name || "—", initials: window.__poUser?.initials || "—", color: "#2563eb", hours: 0, license: "" };
   const [range, setRange] = lbUseState("30");
@@ -14,7 +29,16 @@ function LogbookView({ accent }) {
   const [entries, setEntries] = lbUseState(LOGBOOK_ENTRIES);
   const [addOpen, setAddOpen] = lbUseState(false);
   const [entryDetail, setEntryDetail] = lbUseState(null);
+  const [form, setForm] = lbUseState(() => ({
+    date: new Date().toISOString().slice(0, 10), time: "12:00",
+    aircraft: (typeof UAVS !== "undefined" && UAVS[0]?.id) || "", role: "PIC",
+    duration: 30, night: 0, bvlos: 0, ldgs: 1, area: "", notes: "",
+  }));
+  const [logFile, setLogFile] = lbUseState(null);
+  const [uploading, setUploading] = lbUseState(false);
   const toast = useToast();
+  const setF = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+  const closeAdd = () => { if (!uploading) { setAddOpen(false); setLogFile(null); } };
 
   // Per-pilot filter — defaults to the signed-in pilot if they have entries.
   const pilots = lbUseMemo(() => [...new Set(entries.map(e => e.pilotName).filter(Boolean))].sort(), [entries]);
@@ -95,16 +119,52 @@ function LogbookView({ accent }) {
     toast({ kind: "success", title: "Exported", msg: `${filtered.length} entries → CSV` });
   }
 
-  async function addEntry(e) {
-    const { data, error } = await window.__supabase.from("logbook_entries").insert({
-      pilot_id: window.__poUser?.id || null, date: e.date,
-      aircraft_type: e.aircraft, conditions: e.mode, duration_min: e.duration,
-      night: !!e.night, bvlos: !!e.bvlos, notes: e.area,
+  async function addEntry() {
+    const sb = window.__supabase;
+    const uid = window.__poUser?.id || null;
+    if (!uid) { toast({ kind: "warn", title: "Not signed in", msg: "Sign in again and retry." }); return; }
+    const dur = Number(form.duration);
+    if (!form.date || !(dur > 0)) { toast({ kind: "warn", title: "Missing details", msg: "Enter a date and a duration (min)." }); return; }
+
+    // Optionally attach a raw flight-controller log (.bin etc.) to this entry.
+    let logPath = null, logName = null, logSize = null;
+    if (logFile) {
+      if (!LOG_EXT.some((x) => logFile.name.toLowerCase().endsWith(x))) {
+        toast({ kind: "warn", title: "Unsupported file", msg: `Upload a flight log (${LOG_EXT.join(", ")}).` }); return;
+      }
+      if (logFile.size > LOG_MAX_MB * 1e6) {
+        toast({ kind: "warn", title: "File too large", msg: `Logs must be under ${LOG_MAX_MB} MB.` }); return;
+      }
+      setUploading(true);
+      const safe = logFile.name.replace(/[^\w.\-]/g, "_");
+      const path = `${uid}/logs/${Date.now()}_${safe}`;
+      const up = await sb.storage.from("media").upload(path, logFile, { upsert: false, contentType: "application/octet-stream" });
+      if (up.error) { setUploading(false); toast({ kind: "warn", title: "Upload failed", msg: up.error.message }); return; }
+      logPath = path; logName = logFile.name; logSize = logFile.size;
+    }
+
+    const night = Number(form.night) > 0, bvlos = Number(form.bvlos) > 0;
+    const { data, error } = await sb.from("logbook_entries").insert({
+      pilot_id: uid, date: form.date, aircraft_type: form.aircraft, conditions: "Manual",
+      duration_min: dur, night, bvlos, notes: form.area || form.notes || null,
+      log_path: logPath, log_name: logName, log_size: logSize,
     }).select().single();
-    if (error) { toast({ kind: "warn", title: "Save failed", msg: error.message }); return; }
-    setEntries(prev => [{ ...e, id: data.id }, ...prev]);
-    setAddOpen(false);
-    toast({ kind: "success", title: "Entry logged", msg: `${e.duration} min on ${e.aircraft}` });
+    setUploading(false);
+    if (error) {
+      if (logPath) sb.storage.from("media").remove([logPath]).catch(() => {}); // don't orphan the file
+      toast({ kind: "warn", title: "Save failed", msg: error.message }); return;
+    }
+
+    setEntries(prev => [{
+      id: data.id, flightCode: "—", flightId: null, pilotId: uid, pilotName: window.__poUser?.name || "—",
+      date: form.date, time: form.time || "", aircraft: form.aircraft, model: form.aircraft,
+      area: form.area || form.notes || "", role: form.role, duration: dur,
+      day: night ? 0 : dur, night: night ? dur : 0, bvlos: bvlos ? dur : 0, vlos: bvlos ? 0 : dur,
+      ldgs: Number(form.ldgs) || 1, mode: "Manual", notes: form.notes,
+      logPath, logName, logSize,
+    }, ...prev]);
+    setAddOpen(false); setLogFile(null);
+    toast({ kind: "success", title: "Entry logged", msg: logName ? `${dur} min · log “${logName}” attached` : `${dur} min on ${form.aircraft}` });
   }
 
   return (
@@ -311,32 +371,58 @@ function LogbookView({ accent }) {
 
       {/* Add entry modal */}
       {addOpen && (
-        <Modal open onClose={() => setAddOpen(false)} title="Log flight entry" subtitle="Manual logbook entry — auto-logged flights need no entry" icon="plus"
+        <Modal open onClose={closeAdd} title="Log flight entry" subtitle="Manual entry — e.g. a flight flown from another controller" icon="plus"
                footer={
                  <>
-                   <button className="btn" onClick={() => setAddOpen(false)}>Cancel</button>
-                   <button className="btn btn-primary" onClick={() => addEntry({
-                     date: new Date().toISOString().slice(0,10), time: "12:00",
-                     aircraft: "UAV-A14", model: "Skyhawk 6X", area: "Manual entry",
-                     role: "PIC", duration: 30, day: 30, night: 0, bvlos: 0, vlos: 30, ldgs: 1, mode: "Manual"
-                   })}><Icon name="check" size={14}/> Log entry</button>
+                   <button className="btn" onClick={closeAdd} disabled={uploading}>Cancel</button>
+                   <button className="btn btn-primary" onClick={addEntry} disabled={uploading}>
+                     {uploading ? <><span className="loading-spin"/> Uploading…</> : <><Icon name="check" size={14}/> Log entry</>}
+                   </button>
                  </>
                }>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div className="field"><label className="field-label">Date</label><input className="input" type="date" defaultValue="2026-06-03"/></div>
-            <div className="field"><label className="field-label">Start time</label><input className="input" type="time" defaultValue="07:30"/></div>
+            <div className="field"><label className="field-label">Date</label><input className="input" type="date" value={form.date} onChange={e => setF("date", e.target.value)}/></div>
+            <div className="field"><label className="field-label">Start time</label><input className="input" type="time" value={form.time} onChange={e => setF("time", e.target.value)}/></div>
             <div className="field"><label className="field-label">Aircraft</label>
-              <select className="select" defaultValue="UAV-A14">{UAVS.map(u => <option key={u.id} value={u.id}>{u.id} — {u.model}</option>)}</select>
+              {typeof UAVS !== "undefined" && UAVS.length ? (
+                <select className="select" value={form.aircraft} onChange={e => setF("aircraft", e.target.value)}>
+                  {UAVS.map(u => <option key={u.id} value={u.id}>{u.id} — {u.model}</option>)}
+                </select>
+              ) : (
+                <input className="input" value={form.aircraft} onChange={e => setF("aircraft", e.target.value)} placeholder="Type / registration"/>
+              )}
             </div>
             <div className="field"><label className="field-label">Role</label>
-              <select className="select" defaultValue="PIC"><option>PIC</option><option>Co-pilot</option><option>Observer</option><option>Trainee</option></select>
+              <select className="select" value={form.role} onChange={e => setF("role", e.target.value)}><option>PIC</option><option>Co-pilot</option><option>Observer</option><option>Trainee</option></select>
             </div>
-            <div className="field" style={{ gridColumn: "span 2" }}><label className="field-label">Coverage area</label><input className="input" placeholder="e.g. North Perimeter"/></div>
-            <div className="field"><label className="field-label">Total duration (min)</label><input className="input" type="number" defaultValue="30"/></div>
-            <div className="field"><label className="field-label">Of which: night (min)</label><input className="input" type="number" defaultValue="0"/></div>
-            <div className="field"><label className="field-label">BVLOS (min)</label><input className="input" type="number" defaultValue="0"/></div>
-            <div className="field"><label className="field-label">Landings</label><input className="input" type="number" defaultValue="1"/></div>
-            <div className="field" style={{ gridColumn: "span 2" }}><label className="field-label">Notes</label><textarea className="input" rows="2" placeholder="Optional — conditions, anomalies, training focus…"/></div>
+            <div className="field" style={{ gridColumn: "span 2" }}><label className="field-label">Coverage area</label><input className="input" value={form.area} onChange={e => setF("area", e.target.value)} placeholder="e.g. North Perimeter"/></div>
+            <div className="field"><label className="field-label">Total duration (min)</label><input className="input" type="number" min="0" value={form.duration} onChange={e => setF("duration", e.target.value)}/></div>
+            <div className="field"><label className="field-label">Of which: night (min)</label><input className="input" type="number" min="0" value={form.night} onChange={e => setF("night", e.target.value)}/></div>
+            <div className="field"><label className="field-label">BVLOS (min)</label><input className="input" type="number" min="0" value={form.bvlos} onChange={e => setF("bvlos", e.target.value)}/></div>
+            <div className="field"><label className="field-label">Landings</label><input className="input" type="number" min="0" value={form.ldgs} onChange={e => setF("ldgs", e.target.value)}/></div>
+            <div className="field" style={{ gridColumn: "span 2" }}><label className="field-label">Notes</label><textarea className="input" rows="2" value={form.notes} onChange={e => setF("notes", e.target.value)} placeholder="Optional — conditions, anomalies, training focus…"/></div>
+
+            {/* Flight-log attachment (.bin from another controller) */}
+            <div className="field" style={{ gridColumn: "span 2" }}>
+              <label className="field-label">Flight log <span className="muted" style={{ fontWeight: 400 }}>· optional ({LOG_EXT.join(", ")}, max {LOG_MAX_MB} MB)</span></label>
+              {logFile ? (
+                <div className="row" style={{ gap: 8, alignItems: "center", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
+                  <Icon name="reports" size={14}/>
+                  <span className="mono" style={{ fontSize: 12, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{logFile.name}</span>
+                  <span className="muted" style={{ fontSize: 11.5 }}>{fmtSize(logFile.size)}</span>
+                  <button className="btn btn-sm" onClick={() => setLogFile(null)} disabled={uploading}><Icon name="close" size={12}/></button>
+                </div>
+              ) : (
+                <label className="btn" style={{ cursor: "pointer", display: "inline-flex" }}>
+                  <Icon name="upload" size={14}/> Choose log file
+                  <input type="file" accept={LOG_EXT.join(",")} style={{ display: "none" }}
+                         onChange={e => { const f = e.target.files?.[0]; if (f) setLogFile(f); e.target.value = ""; }}/>
+                </label>
+              )}
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 5, lineHeight: 1.5 }}>
+                Attach the raw controller log for a flight that wasn't recorded live in Pilot Ops. Stored securely; downloadable later from this entry.
+              </div>
+            </div>
           </div>
         </Modal>
       )}
@@ -346,6 +432,7 @@ function LogbookView({ accent }) {
         <Modal open onClose={() => setEntryDetail(null)} title={entryDetail.flightCode} subtitle={`${entryDetail.area || entryDetail.pilotName} · ${entryDetail.date}`} icon="reports"
                footer={<>
                  <button className="btn" onClick={() => setEntryDetail(null)}>Close</button>
+                 {entryDetail.logPath && <button className="btn" onClick={() => downloadEntryLog(entryDetail, toast)}><Icon name="download" size={14}/> Download log</button>}
                  <button className="btn"><Icon name="edit" size={14}/> Edit</button>
                  <button className="btn btn-primary"><Icon name="reports" size={14}/> Open flight record</button>
                </>}>
@@ -366,6 +453,17 @@ function LogbookView({ accent }) {
               </div>
             ))}
           </div>
+          {entryDetail.logPath && (
+            <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 11, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>Attached flight log</div>
+              <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                <Icon name="reports" size={14}/>
+                <span className="mono" style={{ fontSize: 12.5, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entryDetail.logName || "flight log"}</span>
+                {entryDetail.logSize ? <span className="muted" style={{ fontSize: 11.5 }}>{fmtSize(entryDetail.logSize)}</span> : null}
+                <button className="btn btn-sm" onClick={() => downloadEntryLog(entryDetail, toast)}><Icon name="download" size={12}/> Download</button>
+              </div>
+            </div>
+          )}
         </Modal>
       )}
     </div>

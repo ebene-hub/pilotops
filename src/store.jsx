@@ -240,6 +240,7 @@ export async function bootstrap() {
         date: l.date, time: "", aircraft: l.aircraft_type, model: l.aircraft_type,
         area: l.notes || "", role: "PIC", duration: dur, day: l.night ? 0 : dur, night: l.night ? dur : 0,
         bvlos: l.bvlos ? dur : 0, vlos: l.bvlos ? 0 : dur, ldgs: 1, mode: l.conditions || "Auto", notes: l.notes,
+        logPath: l.log_path || null, logName: l.log_name || null, logSize: l.log_size || null,
       };
     }),
     CURRENCIES: currenciesRaw.map((c) => {
