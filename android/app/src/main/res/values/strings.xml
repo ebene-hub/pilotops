@@ -14,4 +14,8 @@
     <string name="start_casting">Start casting</string>
     <string name="idle">Idle</string>
     <string name="cast_hint">Casting mirrors your whole screen to the mission livestream. Keep the flight app in the foreground.</string>
+    <string name="activate_title">Activate this controller</string>
+    <string name="activate_hint">This controller isn\'t licensed yet. Enter the Pilot Ops license key from your provider to bind the app to this device.</string>
+    <string name="activate_key">PLOPS-XXXX-XXXX-XXXX</string>
+    <string name="activate_button">Activate this controller</string>
 </resources>

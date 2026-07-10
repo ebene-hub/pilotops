@@ -114,6 +114,46 @@ object Supabase {
         }
     }
 
+    /** Is THIS controller activated for the signed-in user's org? (device licensing, 0038/0039)
+     *  Returns true when bound OR when the org has no license keys yet (grandfathered). */
+    fun deviceStatus(session: Session, token: String): Result<Boolean> = runCatching {
+        val body = JSONObject().put("p_token", token)
+        val req = Request.Builder()
+            .url("$base/rest/v1/rpc/device_status")
+            .header("apikey", anon)
+            .header("Authorization", "Bearer ${session.accessToken}")
+            .header("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(JSON))
+            .build()
+        http.newCall(req).execute().use { res ->
+            val text = res.body?.string().orEmpty()
+            if (!res.isSuccessful) error("Activation check failed (${res.code})")
+            JSONObject(text).optBoolean("activated", false)
+        }
+    }
+
+    /** Bind this controller to a license key. reason on failure: invalid_key | no_slots. */
+    fun activateDevice(session: Session, key: String, token: String, fingerprint: String, label: String): Result<ActivationOutcome> = runCatching {
+        val body = JSONObject()
+            .put("p_key", key.trim())
+            .put("p_token", token)
+            .put("p_fingerprint", fingerprint)
+            .put("p_label", label)
+        val req = Request.Builder()
+            .url("$base/rest/v1/rpc/activate_device")
+            .header("apikey", anon)
+            .header("Authorization", "Bearer ${session.accessToken}")
+            .header("Content-Type", "application/json")
+            .post(body.toString().toRequestBody(JSON))
+            .build()
+        http.newCall(req).execute().use { res ->
+            val text = res.body?.string().orEmpty()
+            if (!res.isSuccessful) error(messageOf(text) ?: "Activation failed (${res.code})")
+            val o = JSONObject(text)
+            ActivationOutcome(o.optBoolean("ok", false), o.optString("reason").ifEmpty { null })
+        }
+    }
+
     /** Exchange a pairing code (shown in Pilot Ops) for the bound flight. */
     fun resolvePairCode(session: Session, code: String): Result<Flight?> = runCatching {
         val body = JSONObject().put("p_code", code.trim())

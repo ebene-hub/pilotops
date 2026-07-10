@@ -14,8 +14,8 @@ android {
         applicationId = "com.ggis.uavcompanion"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         buildConfigField("String", "SUPABASE_URL", "\"${prop("SUPABASE_URL", "https://your-domain")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${prop("SUPABASE_ANON_KEY", "")}\"")

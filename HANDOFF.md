@@ -153,12 +153,15 @@ Applied in order under `supabase/migrations/`. Highlights:
 | 0035 | **platform super-admin** — `platform_admins` table + `auth_is_platform_admin()`, license columns on `organizations` (`license_status`/`license_expires_at`/`seat_limit`), `org_is_licensed()` (see §7.5) |
 | 0036 | **platform RPCs** — cross-tenant `platform_list_orgs`, `platform_org_members`, `platform_set_license`, `platform_rename_org`, `platform_get/set_org_email_settings` (all gated on `auth_is_platform_admin()`) |
 | 0037 | **platform_set_pilot_code** — platform-admin/service-role launch-code setter so the platform console can (re)set any member's code and issue codes for demo pilots (see §7.5) |
+| 0038 | **device licensing** — `license_keys` + `device_activations` tables; member RPCs `device_status`/`activate_device` (scoped to `auth_org()`), platform RPCs `platform_list_license_keys`/`platform_create_license_key`/`platform_revoke_license_key`/`platform_release_device`; `platform_list_orgs` gains a `device_count` (see §7.6) |
+| 0039 | **device token → text** — widens `device_activations.device_token` (uuid→text) and recreates `device_status`/`activate_device` with `p_token text`, so the Android companion can bind with its hardware `ANDROID_ID` alongside the web app's UUID (see §7.6) |
 
 > **Pending live-DB migrations checklist.** These aren't obvious from the app code
 > (the policies/functions live only in the migration files). On any DB — especially a
 > fresh Supabase project — confirm **0033** (org isolation), **0034** (logbook attach),
-> **0035 + 0036 + 0037** (platform) have been applied. `cloud-bootstrap.sql` bundles the base
-> schema; the later migrations (0026+) must be applied after if not included.
+> **0035 + 0036 + 0037** (platform), **0038 + 0039** (device licensing) have been applied.
+> `cloud-bootstrap.sql` bundles the base schema; the later migrations (0026+) must be
+> applied after if not included.
 
 ---
 
@@ -277,7 +280,8 @@ that registers — above and outside any single tenant. It deliberately crosses 
   `auth_is_platform_admin()`. Non-platform accounts are rejected even with valid creds.
 - `/platform.html` → `src/platform-main.jsx` → `src/platform-app.jsx` — the console:
   Organizations table (license, seats, members, flights, email-configured), **Create
-  organization**, and a per-org **Manage** drawer (License / Email delivery / Members).
+  organization**, and a per-org **Manage** drawer (License / Devices / Email delivery /
+  Members / Danger).
 - Uses its own auth storage key `po-auth-platform` (`src/api/supabase.js`), independent
   of tenant admin/pilot sessions.
 
@@ -310,6 +314,66 @@ values ('<that-users-profile-uuid>')
 on conflict do nothing;
 ```
 Then sign in at `/platform-login.html`.
+
+---
+
+## 7.6 Per-device (controller/PC) licensing (0038 + 0039)
+
+Ties a Pilot Ops activation to **one controller/PC** so the app can't just be copied onto
+another laptop/controller and used. Two surfaces, one shared set of keys: the **web app**
+(browser deterrent) and the **GGIS UAV Companion APK** (real hardware lock). Layered on top
+of the per-org license (§7.5); independent of it (`seat_limit` caps member accounts,
+`max_activations` caps devices). `device_token` is a **text** column (0039) so it holds both
+the web UUID and the Android hardware ID.
+
+**Model**
+- `license_keys` — a key issued to an org (`PLOPS-XXXX-XXXX-XXXX`), with `max_activations`
+  (set **1** for one-key-one-device, or **N** for a shared fleet key) and `status`
+  (active/revoked).
+- `device_activations` — one row per bound controller: `device_token` (a UUID the client
+  stores in `localStorage["po:device"]`), `fingerprint`, `device_label`, `last_seen_at`,
+  `status` (active/released).
+
+**Client** (`src/api/device.js`): `deviceToken()` (persistent UUID), `deviceFingerprint()`
+(SHA-256 of browser/hardware signals), `deviceLabelGuess()`.
+
+**Enforcement** — in `src/main.jsx` `start()`, right after the org-license gate: calls
+`device_status(token)`; if not activated it renders the **"Activate this controller"**
+screen (license-key input) → `activate_device(key, token, fingerprint, label)`. Kept in
+`main.jsx` only (the single chokepoint). Platform admins never hit it; org admins do.
+
+**Provisioning** — platform console → org **Manage → Devices** tab: create keys (label +
+controller count → key revealed via `RevealModal`), see bound devices with **Release**
+(frees a slot for a replacement controller) and **Revoke key**. All via the `platform_*`
+RPCs (gated on `auth_is_platform_admin()`); member activation via `auth_org()`-scoped RPCs.
+
+**Web strength & limits:** the web surface is a **browser deterrent, not a hardware lock**.
+The token lives in `localStorage`; clearing site data or using a different browser looks
+like a new device. A fingerprint-match rebind (in `activate_device`) covers a cache-clear
+on the *same* browser without burning a slot; a genuinely different browser needs a fresh
+slot or an admin **Release**.
+
+**Android companion — hardware lock (0039):** the GGIS UAV Companion binds to
+`Settings.Secure.ANDROID_ID` (`android/.../data/Device.kt` → `token()`), a genuine
+per-device ID that survives reinstall (same signing key) and changes only on factory reset.
+Side-load the APK onto another controller → different ID → not activated → **blocked before
+it can pair/cast**. Gate: `LoginActivity` calls `Supabase.deviceStatus()` right after
+sign-in; if not activated it routes to `ActivateActivity` (license-key entry →
+`activate_device`) instead of `PairActivity`. A successful check/activation is cached in
+`SharedPreferences` (`Device.setActivated`), so a **network error** at the gate falls back
+to the last-known state (a bound controller isn't stranded in the field); a definitive
+server "not activated" always overrides the cache. Requires rebuilding + re-signing the APK
+(`versionCode 2` / `versionName 1.1`).
+
+**Slot counting caveat:** the web app (localStorage UUID) and the companion (ANDROID_ID)
+present **different tokens**, so one physical Android controller running *both* the browser
+app and the companion consumes **two** activation slots on the same key. Size
+`max_activations` to the number of app installs to license, or issue separate keys. (The
+browser genuinely cannot read ANDROID_ID, so the two can't be unified.)
+
+**Rollout (grandfathering):** `device_status` returns `activated:true` for any org that has
+**no active keys**, so existing orgs/installs are unrestricted until the super admin issues
+that org its first key. Enforcement (web **and** companion) turns on the moment a key exists.
 
 ---
 

@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 
 import { supabase } from "./api/supabase.js";
+import { deviceToken, deviceFingerprint, deviceLabelGuess } from "./api/device.js";
 import { bootstrap } from "./store.jsx";
 
 // Global stylesheet (design tokens, layout, components, responsive + dark mode).
@@ -135,6 +136,67 @@ function licenseBlocked(org) {
   try { supabase.auth.signOut(); } catch {}
 }
 
+// Device-licensing gate: this controller/PC must be activated against one of the org's
+// license keys before the app can be used (see 0038_device_licenses.sql). Renders an
+// activation screen; on success reloads back into start() (now bound). One device = one
+// activation slot; the super admin provisions keys + releases slots from the platform console.
+function activateDevice(orgName) {
+  const root = document.getElementById("root");
+  if (!root) return;
+  const label = deviceLabelGuess();
+  root.innerHTML =
+    `<div style="height:100vh;display:grid;place-items:center;font-family:var(--font-sans);padding:24px">
+       <div style="max-width:420px;width:100%;text-align:center">
+         <div style="width:52px;height:52px;border-radius:50%;background:color-mix(in oklab,var(--accent) 14%,transparent);color:var(--accent);display:grid;place-items:center;margin:0 auto 16px">
+           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22h6M12 6h.01"/></svg>
+         </div>
+         <h1 style="font-size:20px;margin:0 0 8px">Activate this controller</h1>
+         <p style="font-size:13.5px;color:var(--text-2);line-height:1.6;margin:0 0 20px">
+           This device isn't activated for ${orgName ? "<b>" + orgName + "</b>" : "your organization"} yet.
+           Enter the Pilot Ops license key from your provider to bind the app to this controller.
+         </p>
+         <input id="po-act-key" placeholder="PLOPS-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters"
+           style="width:100%;height:42px;padding:0 12px;border:1px solid var(--border);border-radius:9px;background:var(--surface-2);color:var(--text);font-size:15px;letter-spacing:.04em;text-transform:uppercase;margin-bottom:10px"/>
+         <input id="po-act-label" value="${label}"
+           style="width:100%;height:42px;padding:0 12px;border:1px solid var(--border);border-radius:9px;background:var(--surface-2);color:var(--text);font-size:14px;margin-bottom:6px"/>
+         <div style="font-size:11.5px;color:var(--text-3);text-align:left;margin:0 0 16px">A name for this controller (shown to your admin).</div>
+         <div id="po-act-err" style="display:none;font-size:12.5px;color:var(--danger);margin-bottom:12px"></div>
+         <button id="po-act-go" class="btn btn-primary" style="width:100%;height:42px">Activate this controller</button>
+         <button id="po-act-out" class="btn" style="width:100%;height:38px;margin-top:10px">Sign out</button>
+       </div>
+     </div>`;
+  const keyEl = document.getElementById("po-act-key");
+  const labelEl = document.getElementById("po-act-label");
+  const errEl = document.getElementById("po-act-err");
+  const goEl = document.getElementById("po-act-go");
+  const showErr = (m) => { errEl.textContent = m; errEl.style.display = "block"; };
+  keyEl?.focus();
+  const submit = async () => {
+    const key = (keyEl.value || "").trim();
+    if (!key) { showErr("Enter your license key."); return; }
+    errEl.style.display = "none";
+    goEl.disabled = true; goEl.textContent = "Activating…";
+    try {
+      const fp = await deviceFingerprint();
+      const { data, error } = await supabase.rpc("activate_device", {
+        p_key: key, p_token: deviceToken(), p_fingerprint: fp, p_label: (labelEl.value || "").trim(),
+      });
+      if (error) { showErr(error.message || "Activation failed."); }
+      else if (data?.ok) { window.location.reload(); return; }
+      else if (data?.reason === "invalid_key") { showErr("That license key isn't valid for your organization."); }
+      else if (data?.reason === "no_slots") { showErr("All device slots for this key are in use — ask your provider to release one or issue another key."); }
+      else { showErr("Activation failed. Contact your provider."); }
+    } catch (e) { showErr(e?.message || "Activation failed."); }
+    goEl.disabled = false; goEl.textContent = "Activate this controller";
+  };
+  goEl?.addEventListener("click", submit);
+  keyEl?.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+  document.getElementById("po-act-out")?.addEventListener("click", async () => {
+    try { await supabase.auth.signOut(); } catch {}
+    window.location.replace("/login.html");
+  });
+}
+
 function pendingKyc(status, code) {
   const rejected = status === "rejected";
   const root = document.getElementById("root");
@@ -196,6 +258,16 @@ async function start() {
   if (prof?.org_id) {
     const { data: org } = await supabase.from("organizations").select("license_status, license_expires_at").eq("id", prof.org_id).maybeSingle();
     if (org && !poLicenseOk(org)) { licenseBlocked(org); return; }
+  }
+  // Device gate: this controller/PC must be activated against one of the org's license
+  // keys (per-device licensing, 0038). Grandfathered — an org with no keys is unrestricted.
+  {
+    const { data: dev } = await supabase.rpc("device_status", { p_token: deviceToken() });
+    if (dev && !dev.activated) {
+      let orgName = "";
+      try { const { data: o } = await supabase.from("organizations").select("name").eq("id", prof.org_id).maybeSingle(); orgName = o?.name || ""; } catch {}
+      activateDevice(orgName); return;
+    }
   }
   // KYC gate: a non-admin whose account hasn't been verified by an admin can't
   // use any feature yet. Admins (incl. the founding admin, auto-verified) pass.

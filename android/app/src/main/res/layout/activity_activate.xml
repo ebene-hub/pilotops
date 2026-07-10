@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="28dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/activate_title"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="4dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:text="@string/activate_hint"
+        android:textColor="#94a3b8"
+        android:layout_marginBottom="20dp" />
+
+    <TextView
+        android:id="@+id/deviceLabel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:textColor="#64748b"
+        android:textSize="12sp"
+        android:layout_marginBottom="16dp" />
+
+    <EditText
+        android:id="@+id/key"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/activate_key"
+        android:inputType="textCapCharacters"
+        android:gravity="center"
+        android:textSize="18sp"
+        android:letterSpacing="0.08"
+        android:fontFamily="monospace"
+        android:layout_marginBottom="18dp" />
+
+    <Button
+        android:id="@+id/activate"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/activate_button" />
+
+    <TextView
+        android:id="@+id/status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:textColor="#94a3b8"
+        android:layout_marginTop="16dp" />
+
+</LinearLayout>

@@ -247,11 +247,12 @@ function ManageDrawer({ org, onClose, onChanged }) {
     <Modal open onClose={onClose} title={org.name} subtitle="Manage organization" icon="settings" size="lg"
            footer={<button className="btn" onClick={onClose}>Close</button>}>
       <div className="row" style={{ gap: 6, marginBottom: 16, borderBottom: "1px solid var(--border)", paddingBottom: 10 }}>
-        {[["license", "License"], ["email", "Email delivery"], ["members", "Members"], ["danger", "Danger"]].map(([v, l]) => (
+        {[["license", "License"], ["devices", "Devices"], ["email", "Email delivery"], ["members", "Members"], ["danger", "Danger"]].map(([v, l]) => (
           <button key={v} className={"btn btn-sm " + (tab === v ? "btn-primary" : "")} onClick={() => setTab(v)}>{l}</button>
         ))}
       </div>
       {tab === "license" && <LicenseTab org={org} onChanged={onChanged}/>}
+      {tab === "devices" && <DevicesTab org={org} onChanged={onChanged}/>}
       {tab === "email" && <EmailTab org={org}/>}
       {tab === "members" && <MembersTab org={org}/>}
       {tab === "danger" && <DangerTab org={org} onClose={onClose} onChanged={onChanged}/>}
@@ -315,6 +316,94 @@ function LicenseTab({ org, onChanged }) {
         <button className="btn btn-primary" onClick={save} disabled={busy}><Icon name="check" size={13}/> {busy ? "Saving…" : "Save license"}</button>
       </div>
       <div className="muted" style={{ gridColumn: "span 2", fontSize: 12, lineHeight: 1.5 }}>Suspended or expired organizations are blocked from signing in (admins and pilots) with a message to contact their provider.</div>
+    </div>
+  );
+}
+
+// Per-device licensing (0038): issue license keys (each with a max-activations count),
+// see which controllers are bound, release a slot, or revoke a key. Set max = 1 for a
+// strict one-key-one-device key, or N for a shared fleet key.
+function DevicesTab({ org }) {
+  const [keys, setKeys] = pUseState(null);
+  const [label, setLabel] = pUseState("");
+  const [max, setMax] = pUseState(1);
+  const [busy, setBusy] = pUseState(false);
+  const [reveal, setReveal] = pUseState(null);
+  const toast = useToast();
+
+  const load = pUseCallback(() => {
+    supabase.rpc("platform_list_license_keys", { p_org: org.id }).then(({ data, error }) => {
+      if (error) { toast({ kind: "warn", title: "Couldn't load keys", msg: error.message }); setKeys([]); return; }
+      setKeys(data || []);
+    });
+  }, [org.id]);
+  pUseEffect(() => { load(); }, [load]);
+
+  async function createKey() {
+    setBusy(true);
+    const { data, error } = await supabase.rpc("platform_create_license_key", { p_org: org.id, p_label: label.trim(), p_max: Number(max) || 1 });
+    setBusy(false);
+    if (error) { toast({ kind: "warn", title: "Create failed", msg: error.message }); return; }
+    setLabel(""); setMax(1); load();
+    setReveal({ title: "License key created", subtitle: `Give this to ${org.name}. It activates up to ${Number(max) || 1} controller(s).`, rows: [{ label: "License key", value: data }] });
+  }
+  async function revoke(k) {
+    if (!confirm(`Revoke key ${k.key}? Devices bound to it lose access on next launch.`)) return;
+    const { error } = await supabase.rpc("platform_revoke_license_key", { p_key_id: k.id });
+    if (error) { toast({ kind: "warn", title: "Revoke failed", msg: error.message }); return; }
+    toast({ kind: "success", title: "Key revoked" }); load();
+  }
+  async function release(k, d) {
+    if (!confirm(`Release "${d.device_label || "this device"}"? Frees a slot so ${k.key} can activate on a new controller.`)) return;
+    const { error } = await supabase.rpc("platform_release_device", { p_activation_id: d.id });
+    if (error) { toast({ kind: "warn", title: "Release failed", msg: error.message }); return; }
+    toast({ kind: "success", title: "Device released" }); load();
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 640 }}>
+      <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 14 }}>
+        <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13.5 }}>Issue a license key</div>
+        <div className="row" style={{ gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div className="field" style={{ flex: 1, minWidth: 180 }}><label className="field-label">Label <span className="muted">(optional)</span></label><input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Field team A"/></div>
+          <div className="field" style={{ width: 130 }}><label className="field-label">Controllers</label><input className="input" type="number" min="1" value={max} onChange={(e) => setMax(e.target.value)}/></div>
+          <button className="btn btn-primary" onClick={createKey} disabled={busy}><Icon name="plus" size={13}/> {busy ? "Creating…" : "Create key"}</button>
+        </div>
+        <div className="muted" style={{ fontSize: 11.5, marginTop: 8, lineHeight: 1.5 }}>Set <b>Controllers</b> to how many devices this key may activate — 1 for a single controller, or N for a shared fleet key.</div>
+      </div>
+
+      {keys === null ? <div className="muted" style={{ padding: 16, textAlign: "center" }}>Loading…</div>
+       : keys.length === 0 ? <div className="muted" style={{ padding: 16, textAlign: "center", fontSize: 12.5 }}>No license keys yet — this org is unrestricted until you issue one.</div>
+       : keys.map((k) => (
+        <div key={k.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, opacity: k.status === "revoked" ? 0.55 : 1 }}>
+          <div className="row" style={{ gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+            <div className="row" style={{ gap: 8, alignItems: "center", minWidth: 0 }}>
+              <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>{k.key}</span>
+              <button className="btn btn-sm" onClick={() => { navigator.clipboard?.writeText(k.key); toast({ kind: "success", title: "Copied", msg: k.key }); }}><Icon name="link" size={11}/></button>
+              {k.label && <span className="muted" style={{ fontSize: 12 }}>· {k.label}</span>}
+              {k.status === "revoked" && <span className="badge" style={{ background: "color-mix(in oklab,var(--danger) 14%,transparent)", color: "var(--danger)" }}>revoked</span>}
+            </div>
+            <div className="row" style={{ gap: 8, alignItems: "center" }}>
+              <span className="muted" style={{ fontSize: 12 }}>{k.used}/{k.max_activations} used</span>
+              {k.status === "active" && <button className="btn btn-sm" onClick={() => revoke(k)}><Icon name="trash" size={12}/> Revoke</button>}
+            </div>
+          </div>
+          {(k.devices || []).length > 0 && (
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+              {k.devices.map((d) => (
+                <div key={d.id} className="row" style={{ gap: 8, alignItems: "center", justifyContent: "space-between", fontSize: 12.5, borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+                  <span>{d.device_label || <span className="muted">Unnamed device</span>}</span>
+                  <div className="row" style={{ gap: 10, alignItems: "center" }}>
+                    <span className="muted" style={{ fontSize: 11.5 }}>{d.last_seen_at ? "seen " + fmtDate(d.last_seen_at) : "—"}</span>
+                    <button className="btn btn-sm" onClick={() => release(k, d)}><Icon name="refresh" size={12}/> Release</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+      {reveal && <RevealModal {...reveal} onClose={() => setReveal(null)}/>}
     </div>
   );
 }

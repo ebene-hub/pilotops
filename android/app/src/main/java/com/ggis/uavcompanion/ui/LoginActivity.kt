@@ -5,6 +5,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import androidx.appcompat.app.AppCompatActivity
+import com.ggis.uavcompanion.data.Device
+import com.ggis.uavcompanion.data.Session
 import com.ggis.uavcompanion.data.Supabase
 import com.ggis.uavcompanion.databinding.ActivityLoginBinding
 import kotlin.concurrent.thread
@@ -32,14 +34,34 @@ class LoginActivity : AppCompatActivity() {
             val session = Supabase.signIn(email, password).getOrElse {
                 main.post { busy(false); status(it.message ?: "Sign-in failed.") }; return@thread
             }
+            // Device-licensing gate: this controller must be activated (or its org unlicensed).
+            main.post { status("Checking controller…") }
+            val token = Device.token(this)
+            val statusRes = Supabase.deviceStatus(session, token)
+            val activated = statusRes.getOrElse {
+                // Network error → trust the last-known state so a bound controller keeps working.
+                Device.wasActivated(this)
+            }
+            if (statusRes.isSuccess) Device.setActivated(this, activated)
             main.post {
                 busy(false)
-                startActivity(Intent(this, PairActivity::class.java).apply {
-                    putExtra(PairActivity.EXTRA_TOKEN, session.accessToken)
-                    putExtra(PairActivity.EXTRA_USER_ID, session.userId)
-                })
+                if (activated) goPair(session) else goActivate(session)
             }
         }
+    }
+
+    private fun goPair(session: Session) {
+        startActivity(Intent(this, PairActivity::class.java).apply {
+            putExtra(PairActivity.EXTRA_TOKEN, session.accessToken)
+            putExtra(PairActivity.EXTRA_USER_ID, session.userId)
+        })
+    }
+
+    private fun goActivate(session: Session) {
+        startActivity(Intent(this, ActivateActivity::class.java).apply {
+            putExtra(ActivateActivity.EXTRA_TOKEN, session.accessToken)
+            putExtra(ActivateActivity.EXTRA_USER_ID, session.userId)
+        })
     }
 
     private fun busy(on: Boolean) { b.signIn.isEnabled = !on }
