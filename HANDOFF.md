@@ -152,11 +152,12 @@ Applied in order under `supabase/migrations/`. Highlights:
 | 0034 | **logbook attachment** — `log_path/log_name/log_size` on `logbook_entries` so a pilot can attach a raw `.bin` flight log to a manual entry (file lives in the `media` bucket) |
 | 0035 | **platform super-admin** — `platform_admins` table + `auth_is_platform_admin()`, license columns on `organizations` (`license_status`/`license_expires_at`/`seat_limit`), `org_is_licensed()` (see §7.5) |
 | 0036 | **platform RPCs** — cross-tenant `platform_list_orgs`, `platform_org_members`, `platform_set_license`, `platform_rename_org`, `platform_get/set_org_email_settings` (all gated on `auth_is_platform_admin()`) |
+| 0037 | **platform_set_pilot_code** — platform-admin/service-role launch-code setter so the platform console can (re)set any member's code and issue codes for demo pilots (see §7.5) |
 
 > **Pending live-DB migrations checklist.** These aren't obvious from the app code
 > (the policies/functions live only in the migration files). On any DB — especially a
 > fresh Supabase project — confirm **0033** (org isolation), **0034** (logbook attach),
-> **0035 + 0036** (platform) have been applied. `cloud-bootstrap.sql` bundles the base
+> **0035 + 0036 + 0037** (platform) have been applied. `cloud-bootstrap.sql` bundles the base
 > schema; the later migrations (0026+) must be applied after if not included.
 
 ---
