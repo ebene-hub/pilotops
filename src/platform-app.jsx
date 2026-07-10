@@ -52,12 +52,35 @@ function LicenseBadge({ status, expires }) {
   return <span className="badge" style={{ background: `color-mix(in oklab, ${tone} 14%, transparent)`, color: tone, textTransform: "capitalize" }}>{eff}</span>;
 }
 
+// Fallback role names if the roles table read comes back empty (keeps the
+// register form usable regardless).
+const DEFAULT_ROLES = ["Pilot", "Co-pilot", "Mission Commander", "Safety Officer", "Observer", "Maintenance Tech", "Dispatcher", "Director"];
+
+// Light/dark toggle — reuses the app-wide `po:theme` + data-theme convention so
+// the choice persists and matches the pilot/admin apps.
+function ThemeToggle() {
+  const [theme, setTheme] = pUseState(() => document.documentElement.getAttribute("data-theme") || "light");
+  const toggle = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("po:theme", next); } catch {}
+    setTheme(next);
+  };
+  return (
+    <button className="btn btn-sm" onClick={toggle} title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}>
+      {theme === "dark" ? "☀ Light" : "🌙 Dark"}
+    </button>
+  );
+}
+
 // ---------------------------------------------------------------------------
 function PlatformApp() {
   const [orgs, setOrgs] = pUseState([]);
   const [loading, setLoading] = pUseState(true);
   const [createOpen, setCreateOpen] = pUseState(false);
   const [manage, setManage] = pUseState(null); // org being managed
+  const [reveal, setReveal] = pUseState(null);
+  const [demoBusy, setDemoBusy] = pUseState(false);
   const toast = useToast();
   const me = window.__poPlatformUser || {};
 
@@ -70,6 +93,19 @@ function PlatformApp() {
   }, [toast]);
   pUseEffect(() => { load(); }, [load]);
 
+  // One-click demo pilot in a shared, auto-created "Demo Organization" (the app
+  // requires an org, so a truly org-less account can't use Pilot Ops).
+  async function createDemo() {
+    setDemoBusy(true);
+    const { ok, j, status } = await callGateway("/platform/create-demo-pilot", {});
+    setDemoBusy(false);
+    if (!ok) { toast({ kind: "warn", title: "Demo failed", msg: j.reason || `Error ${status}` }); return; }
+    toast({ kind: "success", title: "Demo pilot created", msg: `In ${j.orgName}. Credentials below.` });
+    setReveal({ title: "Demo pilot created", subtitle: `Ready-to-use pilot in ${j.orgName} (KYC pre-verified)`,
+      rows: [{ label: "Sign-in page", value: location.origin + "/login.html" }, { label: "Email", value: j.email }, { label: "Temp password", value: j.password }, { label: "Launch code", value: j.launchCode }] });
+    load();
+  }
+
   const totalMembers = orgs.reduce((s, o) => s + Number(o.member_count || 0), 0);
   const totalLive = orgs.reduce((s, o) => s + Number(o.live_count || 0), 0);
 
@@ -79,8 +115,9 @@ function PlatformApp() {
       <header style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 24px", borderBottom: "1px solid var(--border)", background: "var(--surface)", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ width: 30, height: 30, borderRadius: 8, background: "linear-gradient(135deg,#1e293b,#0f172a)", border: "1px solid color-mix(in oklab,#7c3aed 40%,transparent)", display: "grid", placeItems: "center", color: "#fff", fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 12 }}>PO</div>
         <div style={{ fontWeight: 600, fontSize: 15 }}>Pilot Ops <span className="badge" style={{ background: "color-mix(in oklab,#7c3aed 16%,transparent)", color: "#a78bfa", marginLeft: 4 }}>PLATFORM</span></div>
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
           <span className="muted" style={{ fontSize: 12.5 }}>{me.email}</span>
+          <ThemeToggle/>
           <button className="btn btn-sm" onClick={async () => { await supabase.auth.signOut(); location.href = "/platform-login.html"; }}><Icon name="logout" size={13}/> Sign out</button>
         </div>
       </header>
@@ -91,7 +128,10 @@ function PlatformApp() {
             <h1 className="page-title" style={{ margin: 0 }}>Organizations</h1>
             <div className="page-sub muted" style={{ fontSize: 13, marginTop: 4 }}>{orgs.length} organizations · {totalMembers} members · {totalLive} live now</div>
           </div>
-          <button className="btn btn-primary" onClick={() => setCreateOpen(true)}><Icon name="plus" size={14}/> Create organization</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn" onClick={createDemo} disabled={demoBusy}><Icon name="plus" size={14}/> {demoBusy ? "Creating…" : "Demo pilot"}</button>
+            <button className="btn btn-primary" onClick={() => setCreateOpen(true)}><Icon name="plus" size={14}/> Create organization</button>
+          </div>
         </div>
 
         <div className="card">
@@ -135,6 +175,7 @@ function PlatformApp() {
 
       {createOpen && <CreateOrgModal onClose={() => setCreateOpen(false)} onCreated={() => { setCreateOpen(false); load(); }}/>}
       {manage && <ManageDrawer org={manage} onClose={() => setManage(null)} onChanged={load}/>}
+      {reveal && <RevealModal {...reveal} onClose={() => setReveal(null)}/>}
     </div>
   );
 }
@@ -372,7 +413,13 @@ function MembersTab({ org }) {
   const loadMembers = pUseCallback(() => {
     supabase.rpc("platform_org_members", { p_org: org.id }).then(({ data }) => setMembers(Array.isArray(data) ? data : []));
   }, [org.id]);
-  pUseEffect(() => { loadMembers(); supabase.from("roles").select("name").order("name").then(({ data }) => setRoles((data || []).map((r) => r.name))); }, [loadMembers]);
+  pUseEffect(() => {
+    loadMembers();
+    supabase.from("roles").select("name").order("name").then(({ data }) => {
+      const names = (data || []).map((r) => r.name).filter(Boolean);
+      setRoles(names.length ? names : DEFAULT_ROLES); // fallback if the read is empty/blocked
+    });
+  }, [loadMembers]);
 
   const toggleRole = (r) => setF((p) => ({ ...p, roles: p.roles.includes(r) ? p.roles.filter((x) => x !== r) : [...p.roles, r] }));
 

@@ -678,12 +678,23 @@ app.post("/platform/reset-password", async (req, res) => {
 // verified KYC (skips the admin KYC gate), Pilot role, and a launch code.
 app.post("/platform/create-demo-pilot", async (req, res) => {
   const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-  const orgId = (req.body?.orgId || "").toString().trim();
+  let orgId = (req.body?.orgId || "").toString().trim();
   const name = (req.body?.name || "Demo Pilot").toString().trim();
   let email = (req.body?.email || "").toString().trim().toLowerCase();
   const pa = await isPlatformAdmin(token);
   if (!pa.ok) return res.status(403).json({ ok: false, reason: "platform admin only" });
-  if (!orgId) return res.status(400).json({ ok: false, reason: "organization required" });
+  // No org given → use a shared, auto-created "Demo Organization". The app needs an
+  // org (RLS isolation + role-based access), so a truly org-less account can't use
+  // Pilot Ops; this keeps demo pilots working but isolated from real customers.
+  if (!orgId) {
+    const { data: existing } = await admin.from("organizations").select("id").eq("name", "Demo Organization").maybeSingle();
+    if (existing) orgId = existing.id;
+    else {
+      const { data: created, error } = await admin.from("organizations").insert({ name: "Demo Organization", license_status: "active" }).select("id").single();
+      if (error) return res.status(500).json({ ok: false, reason: error.message });
+      orgId = created.id;
+    }
+  }
   const { data: org } = await admin.from("organizations").select("id, name").eq("id", orgId).maybeSingle();
   if (!org) return res.status(404).json({ ok: false, reason: "organization not found" });
   if (!email) email = `demo-${Date.now().toString(36)}@demo.pilotops.local`;
@@ -699,7 +710,7 @@ app.post("/platform/create-demo-pilot", async (req, res) => {
   const { error: cErr } = await admin.rpc("platform_set_pilot_code", { p_profile: uid, p_code: code });
   if (cErr) log("demo pilot set code failed", cErr.message);
   log("platform/create-demo-pilot", { org: orgId, email });
-  res.json({ ok: true, userId: uid, email, password, launchCode: cErr ? null : code });
+  res.json({ ok: true, userId: uid, orgName: org.name, email, password, launchCode: cErr ? null : code });
 });
 
 // Whether THIS org (or the server default) can send email.
