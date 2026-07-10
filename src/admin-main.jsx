@@ -55,6 +55,19 @@ async function start() {
   const profile = await currentProfile();
   if (!profile) { window.location.replace("/admin-login.html"); return; }
 
+  // License gate: a suspended/expired org can't use the console. Sign out + show
+  // a message rather than bouncing to login (an existing session would loop).
+  // org_read RLS returns only the caller's own org row.
+  {
+    const { data: org } = await supabase.from("organizations").select("license_status, license_expires_at").maybeSingle();
+    const expired = org?.license_expires_at && new Date(org.license_expires_at) < new Date(new Date().toDateString());
+    if (org && (org.license_status !== "active" || expired)) {
+      await supabase.auth.signOut();
+      splash("Your organization's access is suspended or expired. Contact your provider to restore it.");
+      return;
+    }
+  }
+
   // Effective console permissions: full admins get everything; other roles get
   // the union of their roles' permissions, so the nav shows only their pages.
   let permSet = new Set(["*"]);

@@ -148,9 +148,16 @@ Applied in order under `supabase/migrations/`. Highlights:
 | 0030 | **profiles SELECT grant** — restores table-level grant after legacy keys were disabled (fixed the "not an admin" login bug) |
 | 0031 | **finalize_my_invite()** — email-keyed, idempotent invite acceptance (assigns org + roles, marks accepted). Robust against a lost invite token; run on the member's first sign-in/app entry |
 | 0032 | **aircraft write policy** — permissive RLS so `fleet.manage` holders (Maintenance Tech) can manage the aircraft registry, not just admins (see §7) |
+| 0033 | **org isolation fix** — re-asserts the `trg_org_id` trigger + restrictive `org_isolate` policy across all per-org tables (a fresh DB or a partial apply can leave the restrictive policy inactive → cross-org leakage, e.g. stations). Idempotent; safe to re-run |
+| 0034 | **logbook attachment** — `log_path/log_name/log_size` on `logbook_entries` so a pilot can attach a raw `.bin` flight log to a manual entry (file lives in the `media` bucket) |
+| 0035 | **platform super-admin** — `platform_admins` table + `auth_is_platform_admin()`, license columns on `organizations` (`license_status`/`license_expires_at`/`seat_limit`), `org_is_licensed()` (see §7.5) |
+| 0036 | **platform RPCs** — cross-tenant `platform_list_orgs`, `platform_org_members`, `platform_set_license`, `platform_rename_org`, `platform_get/set_org_email_settings` (all gated on `auth_is_platform_admin()`) |
 
-> When moving to a fresh Supabase project, `cloud-bootstrap.sql` bundles the schema;
-> confirm the later migrations (0026+) are included or apply them after.
+> **Pending live-DB migrations checklist.** These aren't obvious from the app code
+> (the policies/functions live only in the migration files). On any DB — especially a
+> fresh Supabase project — confirm **0033** (org isolation), **0034** (logbook attach),
+> **0035 + 0036** (platform) have been applied. `cloud-bootstrap.sql` bundles the base
+> schema; the later migrations (0026+) must be applied after if not included.
 
 ---
 
@@ -255,6 +262,53 @@ the console login with *"This account doesn't have admin-console access."*
 To change what a role can do or see: edit its permissions in **Admin → Roles &
 permissions** (`set` via the roles table). To add a new scoped admin page, add an entry
 to `ADMIN_PAGE_PERM` and (if it needs a new write) an RLS policy gated on that permission.
+
+---
+
+## 7.5 Platform super-admin (Geoinfotech)
+
+A separate console for the **platform operator** (Geoinfotech) to manage every org
+that registers — above and outside any single tenant. It deliberately crosses the
+`org_isolate` boundary, but **safely**: the tenant RLS is never weakened.
+
+**Where it lives**
+- `/platform-login.html` → `src/platform-login.js` — dedicated sign-in, gated on
+  `auth_is_platform_admin()`. Non-platform accounts are rejected even with valid creds.
+- `/platform.html` → `src/platform-main.jsx` → `src/platform-app.jsx` — the console:
+  Organizations table (license, seats, members, flights, email-configured), **Create
+  organization**, and a per-org **Manage** drawer (License / Email delivery / Members).
+- Uses its own auth storage key `po-auth-platform` (`src/api/supabase.js`), independent
+  of tenant admin/pilot sessions.
+
+**How cross-tenant access is done (security)**
+- Data: SECURITY DEFINER RPCs (`platform_*`, migration 0036) that each gate on
+  `auth_is_platform_admin()` as their first statement (definer fns run as `postgres`,
+  bypassing RLS). Same pattern as `org_email_settings`. A missing gate = data exposure,
+  so review each fn's first line if editing.
+- Account creation (needs the Auth Admin API, can't be SQL): gateway endpoints
+  `POST /platform/create-org` and `POST /platform/register-pilot` — gated on
+  `platform_admins` membership, using the service-role key. They create an email-confirmed
+  account with no password and email a **recovery ("set password") link** (and also return
+  it so the operator can copy it if email isn't configured). Provisioning emails use the
+  **global** gateway transport (`SMTP_*`/`RESEND_API_KEY`).
+
+**License model (0035):** `organizations.license_status` (active/suspended/expired),
+`license_expires_at` (date, null = none), `seat_limit` (int, null = ∞). Seat cap is
+enforced when registering a member. **Login enforcement:** suspended or expired orgs are
+blocked at every entry gate — `admin-login.js`, `admin-main.jsx` (admin) and `main.jsx`
+(pilot; `login.js` redirects into it) — with a "contact your provider" message. (Gate-level
+for v1; deeper RLS-level enforcement is a future hardening step.)
+
+**Bootstrap the first super-admin (run once):**
+```sql
+-- 1. Create the dedicated Geoinfotech account (Supabase dashboard → Auth → Add user,
+--    or one-off generateLink). It should have NO tenant org_id.
+-- 2. Mark it a platform admin:
+insert into platform_admins (profile_id)
+values ('<that-users-profile-uuid>')
+on conflict do nothing;
+```
+Then sign in at `/platform-login.html`.
 
 ---
 

@@ -32,6 +32,20 @@ async function afterPassword(email) {
     const { error } = await supabase.rpc("create_org_and_claim", { p_name: user.user_metadata.pending_org_name });
     if (!error) { window.location.href = "/admin.html"; return; }
   }
+  // License gate: a suspended/expired org can't sign in (fresh sign-ups above are
+  // exempt — a new org defaults to active).
+  if (profile?.org_id) {
+    const { data: org } = await supabase.from("organizations").select("license_status, license_expires_at").eq("id", profile.org_id).maybeSingle();
+    const expired = org?.license_expires_at && new Date(org.license_expires_at) < new Date(new Date().toDateString());
+    if (org && (org.license_status !== "active" || expired)) {
+      await supabase.auth.signOut();
+      fail(org.license_status === "suspended" ? "Your organization's access is suspended — contact your provider."
+        : expired ? "Your organization's license has expired — contact your provider."
+        : "Your organization's access is unavailable — contact your provider.");
+      submitBtn.disabled = false; submitLabel.textContent = "Continue";
+      return;
+    }
+  }
   // Admins always; other roles may enter the console if they hold a permission
   // that unlocks an admin page (Maintenance Tech → aircraft, Safety Officer →
   // emergency reviews / incidents / audit). The console filters the nav to match.

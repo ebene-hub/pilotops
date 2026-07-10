@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en" data-brand="agris">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Sign in · Pilot Ops Platform</title>
+  <link rel="stylesheet" href="/src/styles.css"/>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <style>
+    body { margin:0; font-family:var(--font-sans); color:var(--text); background:var(--bg); min-height:100vh; }
+    .login-main { display:flex; align-items:center; justify-content:center; padding:32px; min-height:100vh; }
+    .login-card { width:100%; max-width:400px; }
+    .login-brand { display:flex; align-items:center; gap:12px; margin-bottom:28px; }
+    .login-brand .mark { width:38px; height:38px; border-radius:10px; background:linear-gradient(135deg,#1e293b,#0f172a); border:1px solid rgba(96,165,250,.3); display:grid; place-items:center; color:#fff; font-weight:700; font-family:var(--font-mono); font-size:14px; }
+    .plat-badge { display:inline-block; padding:2px 7px; border-radius:3px; background:color-mix(in oklab,#7c3aed 18%,transparent); color:#a78bfa; font-size:9.5px; font-weight:700; letter-spacing:.08em; vertical-align:middle; margin-left:6px; }
+    .login-title { font-size:24px; font-weight:600; margin:0 0 6px; letter-spacing:-.01em; }
+    .login-desc { font-size:13.5px; color:var(--text-2); margin:0 0 24px; }
+    .field-stack { display:flex; flex-direction:column; gap:16px; }
+    .input-wrap { position:relative; display:flex; align-items:center; }
+    .pwd-toggle { position:absolute; right:10px; background:none; border:none; color:var(--text-3); cursor:pointer; padding:4px; border-radius:4px; display:grid; place-items:center; }
+    .login-submit { width:100%; height:44px; font-size:14px; font-weight:600; margin-top:4px; justify-content:center; }
+    .login-error { padding:10px 12px; border-radius:8px; background:color-mix(in oklab,var(--danger) 8%,transparent); border:1px solid color-mix(in oklab,var(--danger) 30%,transparent); color:var(--danger); font-size:12.5px; display:none; align-items:center; gap:8px; margin-bottom:16px; }
+    .login-error.show { display:flex; }
+    .remember-row { display:flex; justify-content:flex-end; align-items:center; margin-top:2px; }
+    .remember-row a { font-size:12.5px; color:var(--accent); text-decoration:none; font-weight:500; }
+    .remember-row a:hover { text-decoration:underline; }
+    .login-foot { margin-top:24px; font-size:12.5px; color:var(--text-2); text-align:center; }
+    .login-foot a { color:var(--accent); text-decoration:none; font-weight:500; }
+    .loading-spin { display:inline-block; width:14px; height:14px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin .7s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+  </style>
+  <script>(function(){try{var t=localStorage.getItem("po:theme");if(!t&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+</head>
+<body>
+  <main class="login-main">
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="mark">PO</div>
+        <div style="font-size:15px;font-weight:600">Pilot Ops <span class="plat-badge">PLATFORM</span></div>
+      </div>
+
+      <h2 class="login-title">Platform sign in</h2>
+      <p class="login-desc">Restricted to Geoinfotech platform operators. This console manages all organizations.</p>
+
+      <div id="error" class="login-error">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span id="error-msg">Incorrect email or password.</span>
+      </div>
+
+      <form id="login-form" class="field-stack" autocomplete="on">
+        <div class="field">
+          <label class="field-label" for="email">Email</label>
+          <div class="input-wrap"><input id="email" class="input" type="email" name="email" required placeholder="ops@geoinfotech.io" autocomplete="email"/></div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="password">Password</label>
+          <div class="input-wrap">
+            <input id="password" class="input" type="password" name="password" required placeholder="Enter your password" autocomplete="current-password" style="padding-right:42px"/>
+            <button type="button" class="pwd-toggle" id="pwd-toggle" aria-label="Show password">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="remember-row"><a href="#" id="forgot">Forgot password?</a></div>
+        <button id="submit" type="submit" class="btn btn-primary login-submit"><span id="submit-label">Sign in</span></button>
+      </form>
+
+      <div class="login-foot">Not a platform operator? <a href="/admin-login.html">Admin sign in →</a></div>
+    </div>
+  </main>
+
+  <script type="module" src="/src/platform-login.js"></script>
+</body>
+</html>

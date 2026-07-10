@@ -454,15 +454,146 @@ app.post("/send-test-email", async (req, res) => {
   const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   const to = (req.body?.to || "").toString().trim();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ ok: false, reason: "invalid recipient" });
+  const targetOrg = (req.body?.orgId || "").toString().trim();
   const { data: u } = await admin.auth.getUser(token);
   if (!u?.user) return res.status(401).json({ ok: false, reason: "unauthorized" });
   const { data: profile } = await admin.from("profiles").select("org_id, is_admin").eq("id", u.user.id).maybeSingle();
-  if (!profile || !profile.is_admin) return res.status(403).json({ ok: false, reason: "admin only" });
+  // A platform admin may test any org's transport by passing orgId; otherwise the
+  // caller must be a tenant admin testing their own org.
+  let orgForSend = profile?.org_id || null;
+  if (targetOrg) {
+    const { data: pa } = await admin.from("platform_admins").select("profile_id").eq("profile_id", u.user.id).maybeSingle();
+    if (!pa) return res.status(403).json({ ok: false, reason: "platform admin only" });
+    orgForSend = targetOrg;
+  } else if (!profile || !profile.is_admin) {
+    return res.status(403).json({ ok: false, reason: "admin only" });
+  }
   const html = brandWrap("Email test", `<p>This is a test from Pilot Ops. If you received it, your organization's email delivery is configured correctly. 🎉</p>`);
-  const out = await sendEmailEach(profile.org_id, [to], "Pilot Ops — email test", html);
-  log("send-test-email", { org: profile.org_id, to, sent: out.sent });
+  const out = await sendEmailEach(orgForSend, [to], "Pilot Ops — email test", html);
+  log("send-test-email", { org: orgForSend, to, sent: out.sent });
   if (!out.sent) return res.status(502).json({ ok: false, reason: out.reason || "send failed" });
   res.json({ ok: true, sent: out.sent });
+});
+
+// ---- platform super-admin: cross-tenant provisioning -----------------------
+// These create auth accounts (needs the Admin API, so they can't be SQL RPCs)
+// on behalf of the platform operator. Gated by platform_admins membership — the
+// same table auth_is_platform_admin() checks in Postgres.
+async function isPlatformAdmin(token) {
+  if (!token) return { ok: false };
+  const { data: u } = await admin.auth.getUser(token);
+  if (!u?.user) return { ok: false };
+  const { data: pa } = await admin.from("platform_admins").select("profile_id").eq("profile_id", u.user.id).maybeSingle();
+  return { ok: !!pa, user: u.user };
+}
+
+const initialsOf = (name) => (name || "").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "U";
+
+// Create (or reuse) an email-confirmed auth account with NO password, and return
+// a recovery ("set password") action link that lands on `redirectTo` — which
+// already renders a set-password form for type=recovery (admin-login.js / login.js).
+async function provisionUser(email, name, redirectTo) {
+  let userId;
+  const create = await admin.auth.admin.createUser({
+    email, email_confirm: true,
+    user_metadata: name ? { full_name: name, initials: initialsOf(name) } : {},
+  });
+  if (create.error) {
+    if (!/already|registered|exists/i.test(create.error.message || "")) return { ok: false, reason: create.error.message };
+    // Account already exists — fine, we'll just send them a set-password link.
+  } else {
+    userId = create.data?.user?.id;
+  }
+  const link = await admin.auth.admin.generateLink({ type: "recovery", email, options: redirectTo ? { redirectTo } : {} });
+  if (link.error) return { ok: false, reason: link.error.message };
+  userId = userId || link.data?.user?.id;
+  const action = link.data?.properties?.action_link;
+  if (!userId || !action) return { ok: false, reason: "could not generate set-password link" };
+  return { ok: true, userId, link: action };
+}
+
+// Email a branded "set up your account" message via the org's transport (falls
+// back to the global one, which matters for a brand-new org with no SMTP yet).
+async function sendSetupEmail(orgId, email, orgName, link) {
+  const html = brandWrap("Set up your Pilot Ops account",
+    `<p style="margin:0 0 14px">An account has been created for you on <strong>${esc(orgName)}</strong>.</p>
+     <p style="margin:0 0 18px">Click below to set your password and sign in.</p>
+     <div><a href="${esc(link)}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:11px 20px;border-radius:8px;font-weight:600;font-size:13px">Set password &amp; sign in</a></div>
+     <p style="margin:18px 0 0;font-size:12px;color:#7a8294">If the button doesn't work, paste this link into your browser:<br>${esc(link)}</p>`);
+  const out = await sendEmailEach(orgId, [email], `Your Pilot Ops account for ${orgName}`, html);
+  return out.sent > 0;
+}
+
+// Create a new organization + its first admin.
+app.post("/platform/create-org", async (req, res) => {
+  const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const orgName = (req.body?.orgName || "").toString().trim();
+  const adminEmail = (req.body?.adminEmail || "").toString().trim().toLowerCase();
+  const adminName = (req.body?.adminName || "").toString().trim();
+  const licenseStatus = ["active", "suspended", "expired"].includes(req.body?.licenseStatus) ? req.body.licenseStatus : "active";
+  const expires = (req.body?.expires || "").toString().trim() || null;
+  const seatsRaw = req.body?.seats;
+  const seats = seatsRaw != null && seatsRaw !== "" && Number.isFinite(Number(seatsRaw)) ? Number(seatsRaw) : null;
+  const redirectTo = (req.body?.redirectTo || "").toString().trim() || undefined;
+
+  const pa = await isPlatformAdmin(token);
+  if (!pa.ok) return res.status(403).json({ ok: false, reason: "platform admin only" });
+  if (!orgName) return res.status(400).json({ ok: false, reason: "organization name required" });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(adminEmail)) return res.status(400).json({ ok: false, reason: "valid admin email required" });
+
+  const { data: org, error: orgErr } = await admin.from("organizations")
+    .insert({ name: orgName, license_status: licenseStatus, license_expires_at: expires, seat_limit: seats })
+    .select("id").single();
+  if (orgErr) return res.status(500).json({ ok: false, reason: orgErr.message });
+
+  const prov = await provisionUser(adminEmail, adminName, redirectTo);
+  if (!prov.ok) { // roll back the org so a failed provision doesn't orphan it
+    try { await admin.from("organizations").delete().eq("id", org.id); } catch {}
+    return res.status(500).json({ ok: false, reason: prov.reason });
+  }
+
+  // Make them this org's admin (mirrors create_org_and_claim's effect).
+  await admin.from("profiles").update({ org_id: org.id, is_admin: true, admin_role: "Ops Director", ...(adminName ? { full_name: adminName } : {}) }).eq("id", prov.userId);
+  const { data: dir } = await admin.from("roles").select("id").eq("name", "Director").maybeSingle();
+  if (dir?.id) { try { await admin.from("member_roles").insert({ profile_id: prov.userId, role_id: dir.id, org_id: org.id }); } catch {} }
+
+  const emailed = await sendSetupEmail(org.id, adminEmail, orgName, prov.link);
+  log("platform/create-org", { org: org.id, adminEmail, emailed });
+  res.json({ ok: true, orgId: org.id, link: prov.link, emailed });
+});
+
+// Register a member/pilot into an existing organization.
+app.post("/platform/register-pilot", async (req, res) => {
+  const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const orgId = (req.body?.orgId || "").toString().trim();
+  const email = (req.body?.email || "").toString().trim().toLowerCase();
+  const name = (req.body?.name || "").toString().trim();
+  const roles = Array.isArray(req.body?.roles) ? req.body.roles.slice(0, 12).map(String) : [];
+  const redirectTo = (req.body?.redirectTo || "").toString().trim() || undefined;
+
+  const pa = await isPlatformAdmin(token);
+  if (!pa.ok) return res.status(403).json({ ok: false, reason: "platform admin only" });
+  if (!orgId) return res.status(400).json({ ok: false, reason: "organization required" });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ ok: false, reason: "valid email required" });
+
+  const { data: org } = await admin.from("organizations").select("id, name, seat_limit").eq("id", orgId).maybeSingle();
+  if (!org) return res.status(404).json({ ok: false, reason: "organization not found" });
+  if (org.seat_limit != null) {
+    const { count } = await admin.from("profiles").select("id", { count: "exact", head: true }).eq("org_id", orgId);
+    if ((count || 0) >= org.seat_limit) return res.status(409).json({ ok: false, reason: `seat limit reached (${org.seat_limit})` });
+  }
+
+  const prov = await provisionUser(email, name, redirectTo);
+  if (!prov.ok) return res.status(500).json({ ok: false, reason: prov.reason });
+  await admin.from("profiles").update({ org_id: orgId, ...(name ? { full_name: name } : {}) }).eq("id", prov.userId);
+  if (roles.length) {
+    const { data: roleRows } = await admin.from("roles").select("id, name").in("name", roles);
+    const rows = (roleRows || []).map((r) => ({ profile_id: prov.userId, role_id: r.id, org_id: orgId }));
+    if (rows.length) { try { await admin.from("member_roles").insert(rows); } catch {} }
+  }
+  const emailed = await sendSetupEmail(orgId, email, org.name, prov.link);
+  log("platform/register-pilot", { org: orgId, email, roles, emailed });
+  res.json({ ok: true, userId: prov.userId, link: prov.link, emailed });
 });
 
 // Whether THIS org (or the server default) can send email.

@@ -113,6 +113,28 @@ async function finalizeInviteOnEntry(u) {
   }
 }
 
+// A tenant's license is usable only while active and not past its expiry date.
+function poLicenseOk(org) {
+  if (!org || org.license_status !== "active") return false;
+  if (org.license_expires_at && new Date(org.license_expires_at) < new Date(new Date().toDateString())) return false;
+  return true;
+}
+function licenseBlocked(org) {
+  const expired = org?.license_expires_at && new Date(org.license_expires_at) < new Date(new Date().toDateString());
+  const msg = org?.license_status === "suspended" ? "Your organization's access has been suspended."
+            : expired ? "Your organization's license has expired." : "Your organization's access is unavailable.";
+  const root = document.getElementById("root");
+  if (root) root.innerHTML =
+    `<div style="height:100vh;display:grid;place-items:center;font-family:var(--font-sans);padding:24px;text-align:center;color:var(--text-2)">
+       <div style="max-width:400px">
+         <div style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:8px">Access unavailable</div>
+         <div style="font-size:13.5px;line-height:1.6;margin-bottom:18px">${msg} Please contact your provider to restore access.</div>
+         <a href="/login.html" style="font-size:13px;color:var(--accent);text-decoration:none">← Back to sign in</a>
+       </div>
+     </div>`;
+  try { supabase.auth.signOut(); } catch {}
+}
+
 function pendingKyc(status, code) {
   const rejected = status === "rejected";
   const root = document.getElementById("root");
@@ -165,11 +187,16 @@ async function start() {
   // Access control: only operational roles may use Pilot Ops.
   const [{ data: roleRows }, { data: prof }] = await Promise.all([
     supabase.from("member_roles").select("roles(name)").eq("profile_id", u.id),
-    supabase.from("profiles").select("is_admin, kyc_status").eq("id", u.id).single(),
+    supabase.from("profiles").select("is_admin, kyc_status, org_id").eq("id", u.id).single(),
   ]);
   const roles = (roleRows || []).map((r) => r.roles?.name).filter(Boolean);
   const hasAccess = prof?.is_admin || roles.some((r) => PILOT_OPS_ROLES.has(r));
   if (!hasAccess) { noAccess(roles); return; }
+  // License gate: a suspended/expired organization can't be used (members + admins).
+  if (prof?.org_id) {
+    const { data: org } = await supabase.from("organizations").select("license_status, license_expires_at").eq("id", prof.org_id).maybeSingle();
+    if (org && !poLicenseOk(org)) { licenseBlocked(org); return; }
+  }
   // KYC gate: a non-admin whose account hasn't been verified by an admin can't
   // use any feature yet. Admins (incl. the founding admin, auto-verified) pass.
   // Still show the member their pilot launch code so they can save it meanwhile.

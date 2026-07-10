@@ -13,8 +13,12 @@ if (!url || !anonKey) {
 // areas on the same origin. Give each its own auth storage key so signing out of
 // one does NOT end the other's session — and you can be signed into both
 // independently (e.g. admin console + a pilot session in the same browser).
-const isAdminArea = typeof location !== "undefined" && /admin/i.test(location.pathname);
-const storageKey = isAdminArea ? "po-auth-admin" : "po-auth-pilot";
+// The platform (super-admin) console is a third independent area — give it its
+// own key too so it never clobbers a tenant admin or pilot session.
+const areaPath = typeof location !== "undefined" ? location.pathname : "";
+const storageKey = /platform/i.test(areaPath) ? "po-auth-platform"
+  : /admin/i.test(areaPath) ? "po-auth-admin"
+  : "po-auth-pilot";
 
 export const supabase = createClient(url, anonKey, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey },
