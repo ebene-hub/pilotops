@@ -50,6 +50,11 @@ const SMTP_PASS = process.env.SMTP_PASS || "";
 // platform-level / pre-org, so we borrow a configured org's transport).
 const SEND_EMAIL_HOOK_SECRET = process.env.SEND_EMAIL_HOOK_SECRET || "";
 const AUTH_EMAIL_ORG_ID = process.env.AUTH_EMAIL_ORG_ID || "";
+// Sender for platform provisioning/reset emails when the target org has no active
+// email config of its own (e.g. a brand-new org). Defaults to the auth-email org —
+// a configured org we borrow. This NEVER changes a tenant's own notification sends,
+// which always resolve their own org's transport first.
+const PLATFORM_EMAIL_ORG_ID = process.env.PLATFORM_EMAIL_ORG_ID || AUTH_EMAIL_ORG_ID || "";
 
 if (!URL || !SERVICE_KEY) {
   console.error("stream-gateway: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required");
@@ -512,15 +517,30 @@ async function provisionUser(email, name, redirectTo) {
   return { ok: true, userId, link: action };
 }
 
-// Email a branded "set up your account" message via the org's transport (falls
-// back to the global one, which matters for a brand-new org with no SMTP yet).
-async function sendSetupEmail(orgId, email, orgName, link) {
-  const html = brandWrap("Set up your Pilot Ops account",
-    `<p style="margin:0 0 14px">An account has been created for you on <strong>${esc(orgName)}</strong>.</p>
+const genCode = () => String(Math.floor(100000 + Math.random() * 900000));
+
+// Which org's transport sends platform provisioning/reset mail: the target org if
+// it has its OWN active config, else the platform sender org (borrowed). Keeps
+// tenant sends untouched (those resolve their own org first in transportForOrg).
+async function emailSenderOrg(targetOrg) {
+  if (targetOrg) {
+    const { data: cfg } = await admin.from("org_email_settings").select("active").eq("org_id", targetOrg).maybeSingle();
+    if (cfg?.active) return targetOrg;
+  }
+  return PLATFORM_EMAIL_ORG_ID || targetOrg;
+}
+
+// Branded "here's a link to set/reset your password" email.
+async function sendAccountEmail(orgId, email, orgName, link, opts = {}) {
+  const title = opts.title || "Set up your Pilot Ops account";
+  const intro = opts.intro || `An account has been created for you on <strong>${esc(orgName)}</strong>.`;
+  const cta = opts.cta || "Set password &amp; sign in";
+  const html = brandWrap(title,
+    `<p style="margin:0 0 14px">${intro}</p>
      <p style="margin:0 0 18px">Click below to set your password and sign in.</p>
-     <div><a href="${esc(link)}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:11px 20px;border-radius:8px;font-weight:600;font-size:13px">Set password &amp; sign in</a></div>
+     <div><a href="${esc(link)}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:11px 20px;border-radius:8px;font-weight:600;font-size:13px">${cta}</a></div>
      <p style="margin:18px 0 0;font-size:12px;color:#7a8294">If the button doesn't work, paste this link into your browser:<br>${esc(link)}</p>`);
-  const out = await sendEmailEach(orgId, [email], `Your Pilot Ops account for ${orgName}`, html);
+  const out = await sendEmailEach(await emailSenderOrg(orgId), [email], opts.subject || `Your Pilot Ops account for ${orgName}`, html);
   return out.sent > 0;
 }
 
@@ -557,7 +577,7 @@ app.post("/platform/create-org", async (req, res) => {
   const { data: dir } = await admin.from("roles").select("id").eq("name", "Director").maybeSingle();
   if (dir?.id) { try { await admin.from("member_roles").insert({ profile_id: prov.userId, role_id: dir.id, org_id: org.id }); } catch {} }
 
-  const emailed = await sendSetupEmail(org.id, adminEmail, orgName, prov.link);
+  const emailed = await sendAccountEmail(org.id, adminEmail, orgName, prov.link);
   log("platform/create-org", { org: org.id, adminEmail, emailed });
   res.json({ ok: true, orgId: org.id, link: prov.link, emailed });
 });
@@ -591,9 +611,95 @@ app.post("/platform/register-pilot", async (req, res) => {
     const rows = (roleRows || []).map((r) => ({ profile_id: prov.userId, role_id: r.id, org_id: orgId }));
     if (rows.length) { try { await admin.from("member_roles").insert(rows); } catch {} }
   }
-  const emailed = await sendSetupEmail(orgId, email, org.name, prov.link);
+  // Optionally issue a 6-digit launch code (revealed once to the operator).
+  let launchCode = null;
+  if (req.body?.withLaunchCode) {
+    launchCode = genCode();
+    const { error } = await admin.rpc("platform_set_pilot_code", { p_profile: prov.userId, p_code: launchCode });
+    if (error) { log("register-pilot set code failed", error.message); launchCode = null; }
+  }
+  const emailed = await sendAccountEmail(orgId, email, org.name, prov.link);
   log("platform/register-pilot", { org: orgId, email, roles, emailed });
-  res.json({ ok: true, userId: prov.userId, link: prov.link, emailed });
+  res.json({ ok: true, userId: prov.userId, link: prov.link, emailed, launchCode });
+});
+
+// Permanently delete an organization (storage + member auth accounts + all data).
+app.post("/platform/delete-org", async (req, res) => {
+  const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const orgId = (req.body?.orgId || "").toString().trim();
+  const pa = await isPlatformAdmin(token);
+  if (!pa.ok) return res.status(403).json({ ok: false, reason: "platform admin only" });
+  if (!orgId) return res.status(400).json({ ok: false, reason: "organization required" });
+  try { await purgeOrg(orgId); } catch (e) { return res.status(500).json({ ok: false, reason: e.message }); }
+  log("platform/delete-org", { org: orgId });
+  res.json({ ok: true });
+});
+
+// Delete a single member (their auth account; profile + roles cascade).
+app.post("/platform/delete-member", async (req, res) => {
+  const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const profileId = (req.body?.profileId || "").toString().trim();
+  const pa = await isPlatformAdmin(token);
+  if (!pa.ok) return res.status(403).json({ ok: false, reason: "platform admin only" });
+  if (!profileId) return res.status(400).json({ ok: false, reason: "member required" });
+  const { data: isPa } = await admin.from("platform_admins").select("profile_id").eq("profile_id", profileId).maybeSingle();
+  if (isPa) return res.status(400).json({ ok: false, reason: "can't delete a platform admin here" });
+  try { await admin.auth.admin.deleteUser(profileId); } catch (e) { return res.status(500).json({ ok: false, reason: e.message }); }
+  log("platform/delete-member", { profile: profileId });
+  res.json({ ok: true });
+});
+
+// Reset a member/admin password: emails (and returns) a set-password link.
+app.post("/platform/reset-password", async (req, res) => {
+  const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const email = (req.body?.email || "").toString().trim().toLowerCase();
+  const redirectTo = (req.body?.redirectTo || "").toString().trim() || undefined;
+  const pa = await isPlatformAdmin(token);
+  if (!pa.ok) return res.status(403).json({ ok: false, reason: "platform admin only" });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ ok: false, reason: "valid email required" });
+  const link = await admin.auth.admin.generateLink({ type: "recovery", email, options: redirectTo ? { redirectTo } : {} });
+  if (link.error) return res.status(500).json({ ok: false, reason: link.error.message });
+  const action = link.data?.properties?.action_link;
+  if (!action) return res.status(500).json({ ok: false, reason: "could not generate reset link" });
+  // Resolve the org (for sender + email copy).
+  let orgId = null, orgName = "Pilot Ops";
+  const uid = link.data?.user?.id;
+  if (uid) {
+    const { data: p } = await admin.from("profiles").select("org_id").eq("id", uid).maybeSingle();
+    orgId = p?.org_id || null;
+    if (orgId) { const { data: o } = await admin.from("organizations").select("name").eq("id", orgId).maybeSingle(); orgName = o?.name || orgName; }
+  }
+  const emailed = await sendAccountEmail(orgId, email, orgName, action, { title: "Reset your Pilot Ops password", intro: "A password reset was requested for your account.", cta: "Set a new password", subject: "Reset your Pilot Ops password" });
+  log("platform/reset-password", { email, emailed });
+  res.json({ ok: true, link: action, emailed });
+});
+
+// Create a ready-to-use demo pilot: confirmed account with a temp password,
+// verified KYC (skips the admin KYC gate), Pilot role, and a launch code.
+app.post("/platform/create-demo-pilot", async (req, res) => {
+  const token = (req.body?.token || "").trim() || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const orgId = (req.body?.orgId || "").toString().trim();
+  const name = (req.body?.name || "Demo Pilot").toString().trim();
+  let email = (req.body?.email || "").toString().trim().toLowerCase();
+  const pa = await isPlatformAdmin(token);
+  if (!pa.ok) return res.status(403).json({ ok: false, reason: "platform admin only" });
+  if (!orgId) return res.status(400).json({ ok: false, reason: "organization required" });
+  const { data: org } = await admin.from("organizations").select("id, name").eq("id", orgId).maybeSingle();
+  if (!org) return res.status(404).json({ ok: false, reason: "organization not found" });
+  if (!email) email = `demo-${Date.now().toString(36)}@demo.pilotops.local`;
+  const password = "Demo-" + Math.random().toString(36).slice(2, 8) + Math.floor(10 + Math.random() * 89);
+
+  const create = await admin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { full_name: name, initials: initialsOf(name) } });
+  if (create.error) return res.status(500).json({ ok: false, reason: create.error.message });
+  const uid = create.data.user.id;
+  await admin.from("profiles").update({ org_id: orgId, full_name: name, kyc_status: "verified" }).eq("id", uid);
+  const { data: pilotRole } = await admin.from("roles").select("id").eq("name", "Pilot").maybeSingle();
+  if (pilotRole?.id) { try { await admin.from("member_roles").insert({ profile_id: uid, role_id: pilotRole.id, org_id: orgId }); } catch {} }
+  const code = genCode();
+  const { error: cErr } = await admin.rpc("platform_set_pilot_code", { p_profile: uid, p_code: code });
+  if (cErr) log("demo pilot set code failed", cErr.message);
+  log("platform/create-demo-pilot", { org: orgId, email });
+  res.json({ ok: true, userId: uid, email, password, launchCode: cErr ? null : code });
 });
 
 // Whether THIS org (or the server default) can send email.
@@ -760,6 +866,20 @@ async function cleanupRecordings() {
 // member auth accounts, then delete the org row (all its data cascades via the
 // org_id FKs). Runs hourly; a per-org try/catch keeps one failure from blocking
 // the rest.
+// Hard-purge an org: 1) its Storage files, 2) every member's auth account, 3) the
+// org row (all remaining data cascades via the org_id FKs). Shared by the 48h grace
+// sweep and the immediate /platform/delete-org endpoint.
+async function purgeOrg(orgId) {
+  const { data: media } = await admin.from("media").select("storage_path").eq("org_id", orgId);
+  const paths = (media || []).map((m) => m.storage_path).filter(Boolean);
+  for (let i = 0; i < paths.length; i += 100) {
+    try { await admin.storage.from(MEDIA_BUCKET).remove(paths.slice(i, i + 100)); } catch {}
+  }
+  const { data: profs } = await admin.from("profiles").select("id").eq("org_id", orgId);
+  for (const p of (profs || [])) { try { await admin.auth.admin.deleteUser(p.id); } catch {} }
+  await admin.from("organizations").delete().eq("id", orgId);
+}
+
 async function sweepDeletedOrgs() {
   let orgs;
   try {
@@ -767,20 +887,8 @@ async function sweepDeletedOrgs() {
     orgs = data || [];
   } catch { return; }
   for (const o of orgs) {
-    try {
-      // 1. Storage: remove this org's media files (rows cascade, files don't).
-      const { data: media } = await admin.from("media").select("storage_path").eq("org_id", o.id);
-      const paths = (media || []).map((m) => m.storage_path).filter(Boolean);
-      for (let i = 0; i < paths.length; i += 100) {
-        try { await admin.storage.from(MEDIA_BUCKET).remove(paths.slice(i, i + 100)); } catch {}
-      }
-      // 2. Auth accounts of every member.
-      const { data: profs } = await admin.from("profiles").select("id").eq("org_id", o.id);
-      for (const p of (profs || [])) { try { await admin.auth.admin.deleteUser(p.id); } catch {} }
-      // 3. The org row — cascades all remaining data (flights, incidents, …).
-      await admin.from("organizations").delete().eq("id", o.id);
-      log("org permanently deleted (48h grace elapsed)", { org: o.id, name: o.name });
-    } catch (e) { log("org deletion sweep error", { org: o.id, err: e.message }); }
+    try { await purgeOrg(o.id); log("org permanently deleted (48h grace elapsed)", { org: o.id, name: o.name }); }
+    catch (e) { log("org deletion sweep error", { org: o.id, err: e.message }); }
   }
 }
 

@@ -12,6 +12,37 @@ const gatewayBaseOf = () => {
 };
 const tokenNow = async () => (await supabase.auth.getSession()).data?.session?.access_token || "";
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : "—");
+const genCode = () => String(Math.floor(100000 + Math.random() * 900000));
+
+async function callGateway(path, body) {
+  const r = await fetch(`${gatewayBaseOf()}${path}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: await tokenNow(), ...body }),
+  });
+  const j = await r.json().catch(() => ({}));
+  return { ok: r.ok && j.ok, status: r.status, j };
+}
+
+// Show secrets (set-password link, temp password, launch code) once, with copy.
+function RevealModal({ title, subtitle, rows, onClose }) {
+  const toast = useToast();
+  return (
+    <Modal open onClose={onClose} title={title} subtitle={subtitle || "Copy these now — for security they won't be shown again."} icon="check"
+           footer={<button className="btn btn-primary" onClick={onClose}>Done</button>}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {rows.filter((r) => r.value).map((r) => (
+          <div key={r.label}>
+            <div style={{ fontSize: 11, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 4 }}>{r.label}</div>
+            <div className="row" style={{ gap: 8, alignItems: "center", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
+              <span className="mono" style={{ fontSize: 12.5, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.value}</span>
+              <button className="btn btn-sm" onClick={() => { navigator.clipboard?.writeText(r.value); toast({ kind: "success", title: "Copied", msg: r.label }); }}><Icon name="link" size={12}/> Copy</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
 
 const LICENSE_TONE = { active: "var(--success)", suspended: "var(--danger)", expired: "var(--warning)" };
 function LicenseBadge({ status, expires }) {
@@ -175,14 +206,42 @@ function ManageDrawer({ org, onClose, onChanged }) {
     <Modal open onClose={onClose} title={org.name} subtitle="Manage organization" icon="settings" size="lg"
            footer={<button className="btn" onClick={onClose}>Close</button>}>
       <div className="row" style={{ gap: 6, marginBottom: 16, borderBottom: "1px solid var(--border)", paddingBottom: 10 }}>
-        {[["license", "License"], ["email", "Email delivery"], ["members", "Members"]].map(([v, l]) => (
+        {[["license", "License"], ["email", "Email delivery"], ["members", "Members"], ["danger", "Danger"]].map(([v, l]) => (
           <button key={v} className={"btn btn-sm " + (tab === v ? "btn-primary" : "")} onClick={() => setTab(v)}>{l}</button>
         ))}
       </div>
       {tab === "license" && <LicenseTab org={org} onChanged={onChanged}/>}
       {tab === "email" && <EmailTab org={org}/>}
       {tab === "members" && <MembersTab org={org}/>}
+      {tab === "danger" && <DangerTab org={org} onClose={onClose} onChanged={onChanged}/>}
     </Modal>
+  );
+}
+
+function DangerTab({ org, onClose, onChanged }) {
+  const [confirm, setConfirm] = pUseState("");
+  const [busy, setBusy] = pUseState(false);
+  const toast = useToast();
+  async function del() {
+    setBusy(true);
+    const { ok, j, status } = await callGateway("/platform/delete-org", { orgId: org.id });
+    setBusy(false);
+    if (!ok) { toast({ kind: "warn", title: "Delete failed", msg: j.reason || `Error ${status}` }); return; }
+    toast({ kind: "success", title: "Organization deleted", msg: `${org.name} and all its data were removed.` });
+    onChanged && onChanged(); onClose && onClose();
+  }
+  return (
+    <div style={{ maxWidth: 520 }}>
+      <div style={{ border: "1px solid color-mix(in oklab,var(--danger) 40%,transparent)", borderRadius: 10, padding: 16 }}>
+        <div style={{ fontWeight: 600, color: "var(--danger)", marginBottom: 6 }}>Delete this organization</div>
+        <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, marginBottom: 12 }}>Permanently removes <strong>{org.name}</strong> — every member account, flight, incident, media file, and setting. This cannot be undone.</div>
+        <label className="field-label">Type the organization name to confirm</label>
+        <input className="input" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder={org.name}/>
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+          <button className="btn btn-danger" disabled={busy || confirm.trim() !== org.name} onClick={del}><Icon name="trash" size={13}/> {busy ? "Deleting…" : "Delete organization"}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -304,8 +363,10 @@ function EmailTab({ org }) {
 function MembersTab({ org }) {
   const [members, setMembers] = pUseState(null);
   const [roles, setRoles] = pUseState([]);
-  const [f, setF] = pUseState({ name: "", email: "", roles: [] });
+  const [f, setF] = pUseState({ name: "", email: "", roles: [], withCode: false });
   const [busy, setBusy] = pUseState(false);
+  const [actingId, setActingId] = pUseState(null);
+  const [reveal, setReveal] = pUseState(null);
   const toast = useToast();
 
   const loadMembers = pUseCallback(() => {
@@ -318,32 +379,71 @@ function MembersTab({ org }) {
   async function register() {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email.trim())) return toast({ kind: "warn", title: "Email required", msg: "Enter a valid email." });
     setBusy(true);
-    try {
-      const r = await fetch(`${gatewayBaseOf()}/platform/register-pilot`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: await tokenNow(), orgId: org.id, email: f.email.trim().toLowerCase(), name: f.name.trim(), roles: f.roles, redirectTo: location.origin + "/login.html" }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j.ok) { toast({ kind: "warn", title: "Register failed", msg: j.reason || `Error ${r.status}` }); setBusy(false); return; }
-      toast({ kind: "success", title: "Member registered", msg: j.emailed ? "Set-password link emailed." : "Registered — copy the link from logs." });
-      setF({ name: "", email: "", roles: [] }); loadMembers();
-    } catch (e) { toast({ kind: "warn", title: "Gateway unreachable", msg: e.message }); }
+    const { ok, j, status } = await callGateway("/platform/register-pilot", { orgId: org.id, email: f.email.trim().toLowerCase(), name: f.name.trim(), roles: f.roles, withLaunchCode: f.withCode, redirectTo: location.origin + "/login.html" });
     setBusy(false);
+    if (!ok) { toast({ kind: "warn", title: "Register failed", msg: j.reason || `Error ${status}` }); return; }
+    toast({ kind: "success", title: "Member registered", msg: j.emailed ? "Set-password link emailed." : "Registered." });
+    setReveal({ title: "Member registered", rows: [{ label: "Set-password link", value: j.link }, { label: "Launch code", value: j.launchCode }] });
+    setF({ name: "", email: "", roles: [], withCode: false }); loadMembers();
+  }
+
+  async function resetPassword(m) {
+    setActingId(m.id);
+    const { ok, j, status } = await callGateway("/platform/reset-password", { email: m.email, redirectTo: location.origin + (m.is_admin ? "/admin-login.html" : "/login.html") });
+    setActingId(null);
+    if (!ok) { toast({ kind: "warn", title: "Reset failed", msg: j.reason || `Error ${status}` }); return; }
+    toast({ kind: "success", title: "Reset link ready", msg: j.emailed ? "Emailed to the member." : "Copy the link below." });
+    setReveal({ title: "Password reset", subtitle: `Set-password link for ${m.email}`, rows: [{ label: "Set-password link", value: j.link }] });
+  }
+
+  async function resetCode(m) {
+    setActingId(m.id);
+    const code = genCode();
+    const { error } = await supabase.rpc("platform_set_pilot_code", { p_profile: m.id, p_code: code });
+    setActingId(null);
+    if (error) { toast({ kind: "warn", title: "Couldn't set code", msg: error.message }); return; }
+    setReveal({ title: "Launch code reset", subtitle: `New launch code for ${m.full_name || m.email}`, rows: [{ label: "Launch code", value: code }] });
+  }
+
+  async function del(m) {
+    if (!window.confirm(`Delete ${m.full_name || m.email}? This permanently removes their account.`)) return;
+    setActingId(m.id);
+    const { ok, j, status } = await callGateway("/platform/delete-member", { profileId: m.id });
+    setActingId(null);
+    if (!ok) { toast({ kind: "warn", title: "Delete failed", msg: j.reason || `Error ${status}` }); return; }
+    toast({ kind: "success", title: "Member deleted", msg: m.email });
+    loadMembers();
+  }
+
+  async function demoPilot() {
+    setBusy(true);
+    const { ok, j, status } = await callGateway("/platform/create-demo-pilot", { orgId: org.id });
+    setBusy(false);
+    if (!ok) { toast({ kind: "warn", title: "Demo failed", msg: j.reason || `Error ${status}` }); return; }
+    toast({ kind: "success", title: "Demo pilot created", msg: "Credentials + launch code below." });
+    setReveal({ title: "Demo pilot created", subtitle: "Ready-to-use account (KYC pre-verified)", rows: [{ label: "Email", value: j.email }, { label: "Temp password", value: j.password }, { label: "Launch code", value: j.launchCode }] });
+    loadMembers();
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 620 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 640 }}>
       <div>
-        <label className="field-label" style={{ marginBottom: 8, display: "block" }}>Members ({members?.length ?? "…"})</label>
-        <div style={{ border: "1px solid var(--border)", borderRadius: 8, maxHeight: 220, overflowY: "auto" }}>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <label className="field-label" style={{ margin: 0 }}>Members ({members?.length ?? "…"})</label>
+          <button className="btn btn-sm" onClick={demoPilot} disabled={busy}><Icon name="plus" size={12}/> Demo pilot</button>
+        </div>
+        <div style={{ border: "1px solid var(--border)", borderRadius: 8, maxHeight: 240, overflowY: "auto" }}>
           {members == null ? <div className="muted" style={{ padding: 16, textAlign: "center" }}>Loading…</div>
             : members.length === 0 ? <div className="muted" style={{ padding: 16, textAlign: "center" }}>No members yet.</div>
             : members.map((m) => (
-              <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid var(--border)" }}>
+              <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderBottom: "1px solid var(--border)" }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 500 }}>{m.full_name || m.email} {m.is_admin && <span className="badge" style={{ background: "var(--accent-soft)", color: "var(--accent)", marginLeft: 4 }}>Admin</span>}</div>
                   <div className="muted mono" style={{ fontSize: 11 }}>{m.email} · {(m.roles || []).join(", ") || "no roles"}</div>
                 </div>
+                <button className="btn btn-sm" title="Reset password" onClick={() => resetPassword(m)} disabled={actingId === m.id}><Icon name="shield" size={12}/></button>
+                <button className="btn btn-sm" title="Reset launch code" onClick={() => resetCode(m)} disabled={actingId === m.id}><Icon name="refresh" size={12}/></button>
+                <button className="btn btn-sm btn-danger" title="Delete member" onClick={() => del(m)} disabled={actingId === m.id}><Icon name="trash" size={12}/></button>
               </div>
             ))}
         </div>
@@ -363,10 +463,15 @@ function MembersTab({ org }) {
             ))}
           </div>
         </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, marginTop: 10 }}>
+          <input type="checkbox" checked={f.withCode} onChange={(e) => setF((p) => ({ ...p, withCode: e.target.checked }))}/> Generate a launch code for this member
+        </label>
         <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
           <button className="btn btn-primary" onClick={register} disabled={busy}><Icon name="plus" size={13}/> {busy ? "Registering…" : "Register member"}</button>
         </div>
       </div>
+
+      {reveal && <RevealModal {...reveal} onClose={() => setReveal(null)}/>}
     </div>
   );
 }
